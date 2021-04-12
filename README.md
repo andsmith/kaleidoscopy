@@ -1,0 +1,2 @@
+# kscopy
+Kaleidoscope in python
