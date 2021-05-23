@@ -31,13 +31,11 @@ class MirrorTube(object):
         # Second will connect each mirror's first corner to a point 1cm above that corner.
         co_planar_b = [centers[i] - np.hstack((corners[i], [1.0])) for i in range(n)]
         normals = np.array([np.cross(co_planar_a[i], co_planar_b[i]) for i in range(n)])
-        normals /= - np.linalg.norm(normals, axis=1).reshape(-1,1)  # negate for clockwise orient.
-
+        normals /= - np.linalg.norm(normals, axis=1).reshape(-1, 1)  # negate for clockwise orient.
         corner_array = [np.hstack((corners[i].reshape(-1), [corner_height],
                                    corners[i + 1].reshape(-1), [corner_height])) for i in range(n - 1)]
         corner_array.append(np.hstack((corners[-1].reshape(-1), [corner_height],
                                        corners[0].reshape(-1), [corner_height])))
-
         self._bounds = make_bounds(corners)
         self._n = n
         self._centers = np.array(centers)
@@ -49,18 +47,15 @@ class MirrorTube(object):
             self._plot_mirrors()
 
     def _plot_mirrors(self):
-        arrow_lengths = np.linalg.norm(self._corners[:,:3] - self._corners[:,3:],axis=1)
+        arrow_lengths = np.linalg.norm(self._corners[:, :3] - self._corners[:, 3:], axis=1)
         arrow_length = np.min(arrow_lengths)
         for i in range(self._n):
             plt.plot([self._corners[i, 0], self._corners[i, 3]],
-                     [self._corners[i, 1], self._corners[i, 4]], 'bo-', linewidth=3,markersize=10)
-            plt.plot(self._centers[i, 0],self._centers[i, 1], 'go', markersize=8)
+                     [self._corners[i, 1], self._corners[i, 4]], 'bo-', linewidth=3, markersize=10)
+            plt.plot(self._centers[i, 0], self._centers[i, 1], 'go', markersize=8)
 
-            arrow_end = self._centers[i] + arrow_length * self._normals[i,:]
-
-            plt.plot([self._centers[i, 0],  arrow_end[0]],
-                     [self._centers[i, 1],  arrow_end[1]], 'k-', linewidth=1)
-
+        plt.quiver(self._centers[:, 0], self._centers[:, 1],
+                   self._normals[:, 0], self._normals[:, 1], headwidth=2)
         plt.axis('equal')
         plt.show()
 
@@ -165,7 +160,7 @@ def test_ray_tracing():
     mirrors = IsoscelesMirrorTube(theta_deg=10.0, h_cm=2.54, plot_init=True)
     rays = make_rays((-0.5, 0.5), (-0.5, 0.5), 1.0, (100, 100))
     eye = np.zeros(3).reshape(1, 3)
-
+    import ipdb; ipdb.set_trace()
     test = mirrors.trace(eye, rays, 25.0)
 
 
