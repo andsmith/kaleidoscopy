@@ -74,7 +74,7 @@ class MirrorTube(object):
         :return:  H x W x 3 array of ray destinations on the back plane, or NAN if divergent
         """
         out_points = ray_dirs * 0
-        active = np.ones(ray_dirs.shape[0], dtype=np.uint8)
+        active = np.ones(ray_dirs.shape[:2], dtype=np.uint8)
 
         if ray_starts.size < ray_dirs.size:
             ray_starts = np.tile(ray_starts.reshape(1, 1, 3), (ray_dirs.shape[0], ray_dirs.shape[1], 1))
@@ -157,7 +157,7 @@ def make_rays(x_span, y_span, z, res, unit=True):
 
 
 def test_ray_tracing():
-    mirrors = IsoscelesMirrorTube(theta_deg=10.0, h_cm=2.54, plot_init=True)
+    mirrors = IsoscelesMirrorTube(theta_deg=10.0, h_cm=2.54, plot_init=False)
     rays = make_rays((-0.5, 0.5), (-0.5, 0.5), 1.0, (100, 100))
     eye = np.zeros(3).reshape(1, 3)
     import ipdb; ipdb.set_trace()
