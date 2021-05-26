@@ -102,7 +102,7 @@ class RayBundle(object):
         ax.scatter(x[0::3], y[0::3], z[::3], color=color)
         ax.plot(x, y, z, color=color)
 
-        print(color, x.shape)
+
         return ax
 
     def intersect_active_plane_dist(self, point, normal):
@@ -129,7 +129,9 @@ class RayBundle(object):
         self._origins[_double_index(self._active, subset)] = intersections
 
         new_directions = self._directions[self._active][subset] - 2.0 * np.dot(self._directions[self._active][subset],
-            plane_normal).reshape(-1, 1) * plane_normal.reshape(1, 3)
+                                                                               plane_normal).reshape(-1,
+                                                                                                     1) * plane_normal.reshape(
+            1, 3)
 
         self._directions[_double_index(self._active, subset)] = new_directions
 
@@ -215,8 +217,13 @@ class MirrorTube(object):
 
         out_points = np.zeros(shape=list(rays.get_shape()) + [3])
 
+        # remember these so as to not duplicate
+        last_hits = np.zeros(shape=list(rays.get_shape()), dtype=np.int64) - 1
+
         for iteration in range(max_reflect):
             n_active = rays.get_active_count()
+            ray_mask = rays.get_mask()
+
             logging.info("Ray tracing iteration %i / %i - %i active rays." % (iteration, max_reflect, n_active))
             if np.sum(n_active) == 0:
                 break
@@ -226,21 +233,45 @@ class MirrorTube(object):
             back_distances = rays.intersect_active_plane_dist(back_center, back_normal)
             distances = np.vstack(mirror_distances + [back_distances]).T
 
+            # If the ray just hit a surface, it can't hit it again (all planes), so enforce this explicitly:
+            turn_off = last_hits * 0
+            turn_off[last_hits >= 0] = last_hits[last_hits >= 0]
+            distances[:, turn_off[ray_mask]] = np.inf
+
             # not hitting = going backwards or parallel
-            diverging = np.logical_or(distances < 0, np.isinf(distances))
+            with np.errstate(divide='ignore', invalid='ignore'):
+                diverging = np.logical_or(distances < 0, np.isinf(distances))
+
+            # if #ALL diverging,
+            all_bad = np.bitwise_and.reduce(np.isinf(distances), axis=1)
+            logging.warning("\t%s pixels hit nothing..." % (np.sum(all_bad),))
+            if np.sum(all_bad) > 0:
+                all_bad_idx = np.where(all_bad)[0][0]
+                #print(rays._origins.reshape(-1, 3)[all_bad_idx, :])
+                #print(rays._directions.reshape(-1, 3)[all_bad_idx, :])
+                import ipdb;
+                ipdb.set_trace()
+
             distances[diverging] = np.inf
+            logging.info(
+                "\tIteration has %s rays diverging from %i mirrors + background." % (np.sum(diverging), self._n))
 
             # the "hit" is the closest thing with positive distance  (everything not hitting now is Inf away)
             hits = np.argmin(distances, axis=1)
 
+            # these hit nothing, what to do with them?
+            hits[all_bad] = -1
+
             ray_starts, ray_dirs = rays.get_active_rays()
             # hit the background
             background_hits = hits == self._n
-
+            logging.info(
+                "\tBackground has %s rays hitting it first." % (np.sum(background_hits),))
             background_intersects = back_distances[background_hits].reshape(-1, 1) * ray_dirs[background_hits, :] + \
                                     ray_starts[background_hits, :]
-
-            out_points[_double_index(rays.get_mask(), background_hits)] = background_intersects
+            idx = _double_index(ray_mask, background_hits)
+            out_points[idx] = background_intersects
+            last_hits[idx] = self._n
 
             colors = [[1.0, 0.0, 0.0],
                       [1.0, 0.0, 1.0],
@@ -249,20 +280,38 @@ class MirrorTube(object):
             # or hit a mirror.
             ax = None
             if plot:
-                #ax = rays.plot_3d(back_cm, mask=None, color=[0, 0, 0, 0.8])
+                # ax = rays.plot_3d(back_cm, mask=None, color=[0, 0, 0, 0.8])
                 ax = self.plot_3d(back_cm, 1.0)
+
+            # last reflections
             for mirror_i in range(self._n):
                 mirror_hits = hits == mirror_i
-                mirror_intersects = mirror_distances[mirror_i][mirror_hits].reshape(-1, 1) * ray_dirs[mirror_hits] + \
-                                    ray_starts[mirror_hits]
-                if plot and mirror_i==0:
-                    rays.plot_3d(mirror_distances[mirror_i][mirror_hits], mirror_hits, ax=ax)
+                idx = _double_index(ray_mask, mirror_hits)
+                last_hits[idx] = mirror_i
+                logging.info(
+                    "\tMirror %i has %s rays hitting it first" % (mirror_i, np.sum(mirror_hits),))
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    mirror_intersects = mirror_distances[mirror_i][mirror_hits].reshape(-1, 1) * ray_dirs[mirror_hits] + \
+                                        ray_starts[mirror_hits]
 
+                if plot and mirror_i == 0:
+                    dists = mirror_distances[mirror_i][mirror_hits]
+                    rays.plot_3d(dists, mirror_hits, ax=ax)
                 rays.reflect(mirror_hits, mirror_intersects, self._normals[mirror_i])
 
-            rays.deactivate(background_hits)
+            to_deactivate = np.logical_or(background_hits, all_bad)
+            rays.deactivate(to_deactivate)
+
             if plot:
                 plt.show()
+                plt.imshow(last_hits)
+                plt.axis('equal')
+                plt.colorbar()
+                plt.show()
+            ax = None
+            if plot:
+                # ax = rays.plot_3d(back_cm, mask=None, color=[0, 0, 0, 0.8])
+                ax = self.plot_3d(back_cm, 1.0)
 
         return out_points
 
@@ -304,6 +353,7 @@ def test_ray_tracing():
     mirrors = RectangularMirrorTube(w_cm=2.0, h_cm=2.0)
     ray_span = 0.1
     rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (9, 9))
+
     test = mirrors.trace(rays, 25.0, plot=True)
 
 
