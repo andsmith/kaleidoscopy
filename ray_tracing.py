@@ -3,6 +3,7 @@ import cv2
 import logging
 import time
 import matplotlib.pylab as plt
+import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 from util import make_bounds
 
@@ -101,7 +102,6 @@ class RayBundle(object):
 
         ax.scatter(x[0::3], y[0::3], z[::3], color=color)
         ax.plot(x, y, z, color=color)
-
 
         return ax
 
@@ -215,28 +215,37 @@ class MirrorTube(object):
         back_center = np.array([0.0, 0.0, back_cm]).reshape(1, -1)
         back_normal = np.array([0.0, 0.0, -1.0])  # towards eye
 
+        # Where each ray ends up on the background (i.e. plane back_cm from origin, in positive Z direction)
         out_points = np.zeros(shape=list(rays.get_shape()) + [3])
 
-        # remember these so as to not duplicate
-        last_hits = np.zeros(shape=list(rays.get_shape()), dtype=np.int64) - 1
+        # remember these so as to not hit same thing twice (-1 means invalid)
+        last_hits = np.zeros(np.prod(rays.get_shape()), dtype=np.int64) - 1
 
         for iteration in range(max_reflect):
-            n_active = rays.get_active_count()
             ray_mask = rays.get_mask()
+            n_active = ray_mask.sum()
 
-            logging.info("Ray tracing iteration %i / %i - %i active rays." % (iteration, max_reflect, n_active))
+            logging.info("Ray tracing iteration %i / %i - %i active rays." % (iteration + 1, max_reflect, n_active))
             if np.sum(n_active) == 0:
+                logging.info('\tNo more active rays, trace complete.')
                 break
 
+            # distance to each mirror for each ray
             mirror_distances = [rays.intersect_active_plane_dist(self._centers[i, :], self._normals[i, :]) for i in
                                 range(self._n)]
+            # distance to background
             back_distances = rays.intersect_active_plane_dist(back_center, back_normal)
+
             distances = np.vstack(mirror_distances + [back_distances]).T
 
             # If the ray just hit a surface, it can't hit it again (all planes), so enforce this explicitly:
-            turn_off = last_hits * 0
-            turn_off[last_hits >= 0] = last_hits[last_hits >= 0]
-            distances[:, turn_off[ray_mask]] = np.inf
+
+            # "turning off" = set one column of each row of distances to INF
+            rows_with_col_to_turn_off = np.logical_and(ray_mask.reshape(-1), last_hits >= 0)
+
+            FIX!!!
+            distances[(last_hits>=0)[ray_mask], last_hits[last_hits] = np.inf
+            logging.info("Turned off %i distances of %i surfaces." % (to_turn_off.sum(), self._n + 1))
 
             # not hitting = going backwards or parallel
             with np.errstate(divide='ignore', invalid='ignore'):
@@ -244,14 +253,13 @@ class MirrorTube(object):
 
             # if #ALL diverging,
             all_bad = np.bitwise_and.reduce(np.isinf(distances), axis=1)
-            logging.warning("\t%s pixels hit nothing..." % (np.sum(all_bad),))
             if np.sum(all_bad) > 0:
+                logging.warning("\t%s pixels hit nothing..." % (np.sum(all_bad),))
                 all_bad_idx = np.where(all_bad)[0][0]
-                #print(rays._origins.reshape(-1, 3)[all_bad_idx, :])
-                #print(rays._directions.reshape(-1, 3)[all_bad_idx, :])
-                import ipdb;
-                ipdb.set_trace()
+                print(rays._origins.reshape(-1, 3)[all_bad_idx, :])
+                print(rays._directions.reshape(-1, 3)[all_bad_idx, :])
 
+            # these (ray, surface) pairs cannot be the closest intersection
             distances[diverging] = np.inf
             logging.info(
                 "\tIteration has %s rays diverging from %i mirrors + background." % (np.sum(diverging), self._n))
@@ -263,7 +271,8 @@ class MirrorTube(object):
             hits[all_bad] = -1
 
             ray_starts, ray_dirs = rays.get_active_rays()
-            # hit the background
+
+            # hit the background?
             background_hits = hits == self._n
             logging.info(
                 "\tBackground has %s rays hitting it first." % (np.sum(background_hits),))
@@ -271,32 +280,34 @@ class MirrorTube(object):
                                     ray_starts[background_hits, :]
             idx = _double_index(ray_mask, background_hits)
             out_points[idx] = background_intersects
-            last_hits[idx] = self._n
 
-            colors = [[1.0, 0.0, 0.0],
-                      [1.0, 0.0, 1.0],
-                      [0.0, 1.0, 0.0],
-                      [0.0, 0.0, 1.0]]
+            last_hits[idx.reshape(-1)] = self._n
+
             # or hit a mirror.
             ax = None
             if plot:
                 # ax = rays.plot_3d(back_cm, mask=None, color=[0, 0, 0, 0.8])
                 ax = self.plot_3d(back_cm, 1.0)
 
-            # last reflections
+            # And finally, do the reflections.
+            palette = cm.get_cmap('brg')
+            color_indices = np.linspace(0, 1.0, self._n + 1)
+            print(color_indices)
+            colors = [palette(i) for i in color_indices]
             for mirror_i in range(self._n):
                 mirror_hits = hits == mirror_i
                 idx = _double_index(ray_mask, mirror_hits)
-                last_hits[idx] = mirror_i
+                last_hits[idx.reshape(-1)] = mirror_i
                 logging.info(
                     "\tMirror %i has %s rays hitting it first" % (mirror_i, np.sum(mirror_hits),))
                 with np.errstate(divide='ignore', invalid='ignore'):
                     mirror_intersects = mirror_distances[mirror_i][mirror_hits].reshape(-1, 1) * ray_dirs[mirror_hits] + \
                                         ray_starts[mirror_hits]
 
-                if plot and mirror_i == 0:
-                    dists = mirror_distances[mirror_i][mirror_hits]
-                    rays.plot_3d(dists, mirror_hits, ax=ax)
+                dists = mirror_distances[mirror_i][mirror_hits]
+                if mirror_i == 1:
+                    rays.plot_3d(dists, mirror_hits, color=colors[mirror_i], ax=ax)
+
                 rays.reflect(mirror_hits, mirror_intersects, self._normals[mirror_i])
 
             to_deactivate = np.logical_or(background_hits, all_bad)
@@ -304,7 +315,7 @@ class MirrorTube(object):
 
             if plot:
                 plt.show()
-                plt.imshow(last_hits)
+                plt.imshow(last_hits.reshape(rays.get_shape()))
                 plt.axis('equal')
                 plt.colorbar()
                 plt.show()
@@ -319,9 +330,6 @@ class MirrorTube(object):
 def _double_index(mask, sub_mask):
     """
     Probably could be more efficient
-    :param mask:
-    :param sub_mask:
-    :return:
     """
     r = mask.copy()
     r[mask] = sub_mask
