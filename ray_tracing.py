@@ -235,19 +235,15 @@ class MirrorTube(object):
                                 range(self._n)]
             # distance to background
             back_distances = rays.intersect_active_plane_dist(back_center, back_normal)
-
             distances = np.vstack(mirror_distances + [back_distances]).T
 
-            # If the ray just hit a surface, it can't hit it again (all planes), so enforce this explicitly:
+            # "turn off" (distance <- inf) ray/surface pairs that just happened
+            active_last_hits = last_hits[ray_mask.reshape(-1)]
+            to_turn_off = active_last_hits >= 0
+            idx = np.where(to_turn_off)[0], active_last_hits[to_turn_off]
+            distances[idx] = np.inf
 
-            # "turning off" = set one column of each row of distances to INF
-            rows_with_col_to_turn_off = np.logical_and(ray_mask.reshape(-1), last_hits >= 0)
-
-            FIX!!!
-            distances[(last_hits>=0)[ray_mask], last_hits[last_hits] = np.inf
-            logging.info("Turned off %i distances of %i surfaces." % (to_turn_off.sum(), self._n + 1))
-
-            # not hitting = going backwards or parallel
+            # Also turn of ray/surface parirs that are oriented incorrectly
             with np.errstate(divide='ignore', invalid='ignore'):
                 diverging = np.logical_or(distances < 0, np.isinf(distances))
 
@@ -256,8 +252,6 @@ class MirrorTube(object):
             if np.sum(all_bad) > 0:
                 logging.warning("\t%s pixels hit nothing..." % (np.sum(all_bad),))
                 all_bad_idx = np.where(all_bad)[0][0]
-                print(rays._origins.reshape(-1, 3)[all_bad_idx, :])
-                print(rays._directions.reshape(-1, 3)[all_bad_idx, :])
 
             # these (ray, surface) pairs cannot be the closest intersection
             distances[diverging] = np.inf
@@ -360,7 +354,7 @@ class RectangularMirrorTube(MirrorTube):
 def test_ray_tracing():
     mirrors = RectangularMirrorTube(w_cm=2.0, h_cm=2.0)
     ray_span = 0.1
-    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (9, 9))
+    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (90, 90))
 
     test = mirrors.trace(rays, 25.0, plot=True)
 
