@@ -5,6 +5,7 @@ import time
 import matplotlib.pylab as plt
 import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from util import make_bounds
 
 
@@ -60,10 +61,13 @@ class RayBundle(object):
     def get_active_count(self):
         return np.sum(self._active)
 
-    def get_mask(self):
+    def get_active(self):
         return self._active
 
-    def plot_3d(self, distances=0.1, mask=None, color=(1.0, 0.5, 0.5, 0.9), ax=None):
+    def set_all_active(self):
+        self._active = np.full(self._active.shape, True)
+
+    def plot_3d(self, distances=0.1, mask=None, color=(0., 0., 0., 0.8), ax=None):
         """
         Plot lines from ray origins to distances.
         :param distances:   length of rays, should be scalar or same shape os self._origins.shape[:2]
@@ -74,22 +78,16 @@ class RayBundle(object):
         if ax is None:
             fig = plt.figure()
             ax = fig.add_subplot(111, projection='3d')
-
         n = np.sum(mask) if mask is not None else np.sum(self._active)
-
         ultra_mask = self._active
         if mask is not None:
             ultra_mask = _double_index(self._active, mask)
-
         x = np.zeros(n * 3, dtype=np.float64)
         y = 0 * x
         z = 0 * x
-
         if isinstance(distances, np.ndarray):
             distances = distances.reshape(-1, 1)
-
         destinations = self._origins[ultra_mask] + self._directions[ultra_mask] * distances
-
         x[0::3] = self._origins[ultra_mask][:, 0]
         x[1::3] = destinations[:, 0]
         x[2::3] = np.nan
@@ -99,28 +97,41 @@ class RayBundle(object):
         z[0::3] = self._origins[ultra_mask][:, 2]
         z[1::3] = destinations[:, 2]
         z[2::3] = np.nan
-
         ax.scatter(x[0::3], y[0::3], z[::3], color=color)
         ax.plot(x, y, z, color=color)
 
         return ax
 
-    def intersect_active_plane_dist(self, point, normal):
+    def prism_intersect_dists(self, prism):
         """
-        Return the distance to the intersection of the current bundle with the plane
+        Intersection distance from ACTIVE rays to each face of prism
+        :param prism: Prism object
+        :return: N x M distances, withn N active rays an M mirrors
+        """
+        centers, normals = prism.get_mirrors()
+        dists = [self.plane_intersect_dists(centers[i, :], normals[i, :]) for i in range(prism.get_n())]
+        dists = np.hstack(dists)
+        print(dists.shape)
+        return dists
+
+    def plane_intersect_dists(self, point, normal):
+        """
+        Return the distance to the intersection of ACTIVE rays with given.
         :param point:  a point on the plane
         :param normal:  normal vector to plane
-        :param mask:
-        :return: H x W distances, or if mask is used, 1-dimensional array
+        :return: H x 1 distances for N active rays
         """
+        point = point.reshape(-1)
+        normal = normal.reshape(-1)
+
+        origins = self._origins[self._active].reshape(-1, 3)
+        directions = self._directions[self._active].reshape(-1, 3)
 
         with np.errstate(divide='ignore', invalid='ignore'):
             # parallel rays go to np.inf
-            dists = np.dot(point - self._origins[self._active], normal) / np.dot(self._directions[self._active], normal)
+            dists = np.dot(point - origins, normal) / np.dot(directions, normal)
 
-        if len(dists.shape) == 3:
-            dists = dists.reshape(-1, 3)
-        return dists
+        return dists.reshape(-1, 1)
 
     def deactivate(self, inactive):
         self._active[_double_index(self._active, inactive)] = False
@@ -139,186 +150,234 @@ class RayBundle(object):
         return self._directions.shape[:2]
 
 
-class MirrorTube(object):
+def _get_normals_from_points(c1, c2, c3):
     """
-    Define a ortho-prismatic_tube (shape) tube of mirrors, i.e. all perpendicular to flat, facing indwards.
-    Input is an arbitrary list of 2-d polygon vertices.  (assumed clockwise, mirrors facing inwards)
+    Plane normals from three non-colinear points in the plane.
+    Oriented so clockwise points away from the clock.
+
+    :param c1: (x,y,z) point in plane
+    :param c2: (x,y,z) point in plane, not equal to c1
+    :param c3: (x,y,z) point in plane, not on line c2-c1
+    :return: (x,y,z) normal pointing "up"
+    """
+    n = 3 if len(c1.shape) == 1 else 2
+
+    co_planar_a = c2 - c1  # right-hand rule, to point inward ...
+    co_planar_b = c3 - c1
+    normals = np.cross(co_planar_a, co_planar_b)
+    normals /= np.linalg.norm(normals)
+    return normals
+
+
+class Prism(object):
+    """
+    Class to handle geometry of a right prism.
     """
 
-    def __init__(self, corners, **kwargs):
+    def __init__(self, corners, bottom, top):
         """
-        Define vertices of the mirror prism.
+        Init with list of 2d coordinates (i.e. closed polygon loop), representing view from the top.
 
-        :param corners:  list of 2-d coordinates (numpy arrays), i.e. mirror closes loop of polygon vertices.
-        :param plot_init:  Show mirror set-up
+        :param corners:  Nx2 array, or N-element list of (x, y) pairs, clockwise oriened corners of a N-sided polygon.
+        :param bottom: z-coordinate, bottom of prism
+        :param top:  z-coordinate, top of prism
         """
-        n = len(corners)
-        corner_height = 0.0  # Z-coord
-        # mirror centers are midpoints between corners, and in 3d
-        centers = [(corners[i] + corners[i + 1]) / 2.0 for i in range(n - 1)]
-        centers.append((corners[0] + corners[-1]) / 2.0)
-        centers = [np.hstack((c, [0.])) for c in centers]
+        if not isinstance(corners, np.ndarray):
+            corners = np.array(corners)
+        self._n = corners.shape[0]
+        self._top_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * top))
+        self._bottom_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * bottom))
+        # shift & wrap
+        self._top_right = np.hstack((np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * top))
+        self._bottom_right = np.hstack(
+            (np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * bottom))
+        self._corners_2d = np.hstack((self._top_left[:, :2], self._top_right[:, :2]))
 
-        # Need two non-parallel, co-planar vectors whose cross-product will give us the normal for each mirror
-        # First will connect each mirror's centers to a corner.
-        co_planar_a = [centers[i] - np.hstack((corners[i], [0.0])) for i in range(n)]
-        # Second will connect each mirror's first corner to a point 1cm above that corner.
-        co_planar_b = [centers[i] - np.hstack((corners[i], [1.0])) for i in range(n)]
-        normals = np.array([np.cross(co_planar_a[i], co_planar_b[i]) for i in range(n)])
-        normals /= - np.linalg.norm(normals, axis=1).reshape(-1, 1)  # negate for clockwise orient.
-        corner_array = [np.hstack((corners[i].reshape(-1), [corner_height],
-                                   corners[i + 1].reshape(-1), [corner_height])) for i in range(n - 1)]
+        self._z_centers = (bottom + top) / 2.0
 
-        corner_array.append(np.hstack((corners[-1].reshape(-1), [corner_height],
-                                       corners[0].reshape(-1), [corner_height])))
+        self._centers = (self._top_left + self._top_right + self._bottom_left + self._bottom_right) / 4.0  # rectangles
 
-        self._bounds = make_bounds(corners)
-        self._n = n
-        self._centers = np.array(centers)
-        self._corners = np.array(corner_array)
-        self._normals = normals
-        logging.info("Created %i-mirror tube." % (n,))
+        normals = [_get_normals_from_points(self._centers[i, :],
+                                            self._top_right[i, :],
+                                            self._top_left[i, :]) for i in range(self._n)]
+        self._normals = np.array(normals)
 
-    def plot_mirrors(self):
-        side_lengths = np.linalg.norm(self._corners[:, :3] - self._corners[:, 3:], axis=1)
-        for i in range(self._n):
-            plt.plot([self._corners[i, 0], self._corners[i, 3]],
-                     [self._corners[i, 1], self._corners[i, 4]], 'bo-', linewidth=3, markersize=10)
-            plt.plot(self._centers[i, 0], self._centers[i, 1], 'go', markersize=8)
-            plt.annotate("Mirror %i" % (i,), self._centers[i, :2] + side_lengths[i] / 40)
-        plt.quiver(self._centers[:, 0], self._centers[:, 1],
-                   self._normals[:, 0], self._normals[:, 1], headwidth=2)
-        plt.axis('equal')
+    def get_mirrors(self):
+        """
+        Get mirrors coords
+        :return:  center(s), normal(s)
+        """
+        return self._centers, self._normals
 
-    def plot_3d(self, base, height, ax=None, **kwargs):
+    def plot_3d(self, ax=None, color=(0.1, .15, 1.0, .5), **kwargs):
         if ax is None:
             fig = plt.figure()
             ax = fig.add_subplot(111, projection='3d')
-        ax.scatter(self._corners[:, 0], self._corners[:, 1], height, color=[1.0, 0, 0])
-        ax.scatter(self._corners[:, 3], self._corners[:, 4], base, color=[1.0, 0, 0])
+        all_corners = np.hstack([self._top_right, self._top_left, self._bottom_left, self._bottom_right])
+        for i in range(self._n):
+            x = all_corners[i, ::3]
+            y = all_corners[i, 1::3]
+            z = all_corners[i, 2::3]
+            verts = [list(zip(x, y, z))]  # list necessary python 2/3?
+
+            poly = Poly3DCollection(verts)
+            poly.set_color(color)
+            ax.add_collection3d(poly)
+
+        ax.set_xlim3d(np.min(self._corners_2d[:, 0]), np.max(self._corners_2d[:, 0]))
+        ax.set_ylim3d(np.min(self._corners_2d[:, 1]), np.max(self._corners_2d[:, 1]))
+        ax.set_zlim3d(-10.0, 100.0)
         ax.axis('equal')
+
         return ax
 
-    def get_bounds(self):
-        return self._bounds
+    def get_n(self):
+        return self._n
 
-    def trace(self, rays, back_cm, max_reflect=10, plot=False):
+
+class IsoscelesPrism(Prism):
+    def __init__(self, theta_deg, h_cm, **kwargs):
+        theta = np.deg2rad(theta_deg)
+        corners = [np.array([-np.sin(theta), -h_cm/2]),
+                   np.array([0, h_cm/2]),
+                   np.array([np.sin(theta), -h_cm/2]), ]
+
+
+        super(IsoscelesPrism, self).__init__(corners=corners, **kwargs)
+
+
+class RectangularPrism(Prism):
+    def __init__(self, w_cm, h_cm, **kwargs):
+        hw = w_cm / 2.0
+        hh = h_cm / 2.0
+        corners = [np.array([-hw, -hh]),
+                   np.array([-hw, hh]),
+                   np.array([hw, hh]),
+                   np.array([hw, -hh])]
+        super(RectangularPrism, self).__init__(corners=corners, **kwargs)
+
+
+class MirrorTube(object):
+    """
+    Define a ortho-prismatic tube (shape) tube of mirrors, i.e. all perpendicular to flat, facing indwards.
+    Input is an arbitrary list of 2-d polygon vertices.  (assumed clockwise, mirrors facing inwards)
+    """
+
+    def __init__(self, shape, **kwargs):
+        """
+        Define vertices of the mirror prism.
+
+        :param shape:  Prism object, describing shape of mirror arrangement.
+        """
+        self._facets = shape
+        logging.info("Created %i-mirror tube" % (self._facets.get_n(),))
+
+    def trace(self, rays, ground_z_cm, max_reflect=10, plot=False):
         """
         Bounce rays through mirror tube, see where they land on other side.
 
         :param rays:  a RayBundle object
-        :param back_cm:  Z-coordinate of back, i.e. where rays "hit"
-        :param max_reflect:  how many reflections before ray is considered not converging
-        :return:  H x W x 3 array of ray destinations on the back plane, or NAN if divergent
+        :param ground_z_cm:  when rays exit tube, how far back to ground plane / image?
+        :param max_reflect:  how many reflections before ray is considered not hitting ground plane?
+        :return:  tuple(H x W x 3 array of ray destinations on the ground plane, or NAN if not hitting,
+                        H x W x 3 array of ray distances traveled, or NAN if not hitting)
         """
 
-        back_center = np.array([0.0, 0.0, back_cm]).reshape(1, -1)
-        back_normal = np.array([0.0, 0.0, -1.0])  # towards eye
+        ground_center = np.array([0.0, 0.0, ground_z_cm]).reshape(1, -1)
+        ground_normal = np.array([0.0, 0.0, -1.0])  # towards eye
 
-        # Where each ray ends up on the background (i.e. plane back_cm from origin, in positive Z direction)
         out_points = np.zeros(shape=list(rays.get_shape()) + [3])
+        out_dists = np.zeros(shape=list(rays.get_shape()))
 
-        # remember these so as to not hit same thing twice (-1 means invalid)
+        # remember these so as to not hit same thing twice (-1 means invalid, n+1 means ground (bounce!))
         last_hits = np.zeros(np.prod(rays.get_shape()), dtype=np.int64) - 1
-
+        n = self._facets.get_n()
+        rays.set_all_active()
         for iteration in range(max_reflect):
-            ray_mask = rays.get_mask()
-            n_active = ray_mask.sum()
+            active = rays.get_active()
+            n_active = active.sum()
+            logging.info("Ray tracing iteration %i / %i - %i / %i active rays." % (iteration + 1, max_reflect,
+                                                                                   n_active, active.size))
 
-            logging.info("Ray tracing iteration %i / %i - %i active rays." % (iteration + 1, max_reflect, n_active))
             if np.sum(n_active) == 0:
                 logging.info('\tNo more active rays, trace complete.')
                 break
 
-            # distance to each mirror for each ray
-            mirror_distances = [rays.intersect_active_plane_dist(self._centers[i, :], self._normals[i, :]) for i in
-                                range(self._n)]
-            # distance to background
-            back_distances = rays.intersect_active_plane_dist(back_center, back_normal)
-            distances = np.vstack(mirror_distances + [back_distances]).T
+            # calculate rays distances to all objects
+            mirror_dists = rays.prism_intersect_dists(self._facets)
+            ground_dists = rays.plane_intersect_dists(ground_center, ground_normal)
+            dists = np.hstack([mirror_dists, ground_dists])
 
-            # "turn off" (distance <- inf) ray/surface pairs that just happened
-            active_last_hits = last_hits[ray_mask.reshape(-1)]
-            to_turn_off = active_last_hits >= 0
-            idx = np.where(to_turn_off)[0], active_last_hits[to_turn_off]
-            distances[idx] = np.inf
+            # Set disallowed intersections to infinity
+            active_last_hits = last_hits[active.reshape(-1)]
+            turn_off_mask = active_last_hits >= 0
+            idx = np.where(turn_off_mask)[0], active_last_hits[turn_off_mask]
+            dists[idx] = np.inf
 
-            # Also turn of ray/surface parirs that are oriented incorrectly
-            with np.errstate(divide='ignore', invalid='ignore'):
-                diverging = np.logical_or(distances < 0, np.isinf(distances))
+            # Also turn of ray/surface parirs that are oriented incorrectly (nonpositive distance)
+            with np.errstate(divide='ignore', invalid='ignore'):  # some may now be inf
+                diverging = np.logical_or(dists < 0, np.isinf(dists))
+            dists[diverging] = np.inf
 
-            # if #ALL diverging,
-            all_bad = np.bitwise_and.reduce(np.isinf(distances), axis=1)
+            # ray[i] doesn't hit anything?
+            all_bad = np.bitwise_and.reduce(np.isinf(dists), axis=1)
             if np.sum(all_bad) > 0:
                 logging.warning("\t%s pixels hit nothing..." % (np.sum(all_bad),))
-                all_bad_idx = np.where(all_bad)[0][0]
 
-            # these (ray, surface) pairs cannot be the closest intersection
-            distances[diverging] = np.inf
             logging.info(
-                "\tIteration has %s rays diverging from %i mirrors + background." % (np.sum(diverging), self._n))
+                "\tIteration has %s rays diverging from %i mirrors + background." % (np.sum(diverging), n))
 
-            # the "hit" is the closest thing with positive distance  (everything not hitting now is Inf away)
-            hits = np.argmin(distances, axis=1)
+            hits = np.argmin(dists, axis=1)
 
             # these hit nothing, what to do with them?
-            hits[all_bad] = -1
+            # FIX hits[all_bad] = -1
 
             ray_starts, ray_dirs = rays.get_active_rays()
+            # Hit the ground?  Save.
+            ground_hits = hits == n
+            logging.info("\tGround has %s rays hitting it first." % (np.sum(ground_hits),))
+            intersects = ground_dists[ground_hits] * ray_dirs[ground_hits, :] + ray_starts[ground_hits, :]
+            idx = _double_index(active, ground_hits)
+            out_points[idx] = intersects
+            out_dists[idx] = ground_dists[ground_hits].reshape(-1)
+            last_hits[idx.reshape(-1)] = n
 
-            # hit the background?
-            background_hits = hits == self._n
-            logging.info(
-                "\tBackground has %s rays hitting it first." % (np.sum(background_hits),))
-            background_intersects = back_distances[background_hits].reshape(-1, 1) * ray_dirs[background_hits, :] + \
-                                    ray_starts[background_hits, :]
-            idx = _double_index(ray_mask, background_hits)
-            out_points[idx] = background_intersects
+            # Hit a mirror?  Reflect.
 
-            last_hits[idx.reshape(-1)] = self._n
-
-            # or hit a mirror.
-            ax = None
-            if plot:
-                # ax = rays.plot_3d(back_cm, mask=None, color=[0, 0, 0, 0.8])
-                ax = self.plot_3d(back_cm, 1.0)
-
-            # And finally, do the reflections.
             palette = cm.get_cmap('brg')
-            color_indices = np.linspace(0, 1.0, self._n + 1)
+            color_indices = np.linspace(0, 1.0, n + 1)
             print(color_indices)
             colors = [palette(i) for i in color_indices]
-            for mirror_i in range(self._n):
+
+            if plot:
+                ax = self._facets.plot_3d()
+
+            _, m_normals = self._facets.get_mirrors()
+            for mirror_i in range(n):
                 mirror_hits = hits == mirror_i
-                idx = _double_index(ray_mask, mirror_hits)
-                last_hits[idx.reshape(-1)] = mirror_i
+                idx = _double_index(active, mirror_hits)
+                last_hits[idx.reshape(-1)] = mirror_i  # don't hit again next time!
                 logging.info(
                     "\tMirror %i has %s rays hitting it first" % (mirror_i, np.sum(mirror_hits),))
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    mirror_intersects = mirror_distances[mirror_i][mirror_hits].reshape(-1, 1) * ray_dirs[mirror_hits] + \
+                    mirror_intersects = dists[:, mirror_i][mirror_hits].reshape(-1, 1) * ray_dirs[mirror_hits] + \
                                         ray_starts[mirror_hits]
 
-                dists = mirror_distances[mirror_i][mirror_hits]
-                if mirror_i == 1:
-                    rays.plot_3d(dists, mirror_hits, color=colors[mirror_i], ax=ax)
+                if plot:
+                    rays.plot_3d(dists[:, mirror_i][mirror_hits], mirror_hits, ax=ax)
+                rays.reflect(mirror_hits, mirror_intersects, m_normals[mirror_i, :])
+                if plot:
+                    rays.plot_3d(2, mirror_hits, color=colors[mirror_i], ax=ax)
 
-                rays.reflect(mirror_hits, mirror_intersects, self._normals[mirror_i])
+            if plot:
+                ax.axis('equal')
+                ax.set_aspect('equal')
+                plt.show()
 
-            to_deactivate = np.logical_or(background_hits, all_bad)
+            to_deactivate = np.logical_or(ground_hits, all_bad)
             rays.deactivate(to_deactivate)
 
-            if plot:
-                plt.show()
-                plt.imshow(last_hits.reshape(rays.get_shape()))
-                plt.axis('equal')
-                plt.colorbar()
-                plt.show()
-            ax = None
-            if plot:
-                # ax = rays.plot_3d(back_cm, mask=None, color=[0, 0, 0, 0.8])
-                ax = self.plot_3d(back_cm, 1.0)
-
-        return out_points
+        return out_points.reshape(list(rays.get_shape()) + [3]), out_dists.reshape(rays.get_shape())
 
 
 def _double_index(mask, sub_mask):
@@ -330,33 +389,22 @@ def _double_index(mask, sub_mask):
     return r
 
 
-class IsoscelesMirrorTube(MirrorTube):
-    def __init__(self, theta_deg, h_cm, **kwargs):
-        theta = np.deg2rad(theta_deg)
-        corners = [np.array([-np.sin(theta), 0]),
-                   np.array([0, h_cm]),
-                   np.array([np.sin(theta), 0]), ]
-
-        super(IsoscelesMirrorTube, self).__init__(corners=corners, **kwargs)
-
-
-class RectangularMirrorTube(MirrorTube):
-    def __init__(self, w_cm, h_cm, **kwargs):
-        hw = w_cm / 2.0
-        hh = h_cm / 2.0
-        corners = [np.array([-hw, -hh]),
-                   np.array([-hw, hh]),
-                   np.array([hw, hh]),
-                   np.array([hw, -hh])]
-        super(RectangularMirrorTube, self).__init__(corners=corners, **kwargs)
-
-
 def test_ray_tracing():
-    mirrors = RectangularMirrorTube(w_cm=2.0, h_cm=2.0)
+    # shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
+    shape = IsoscelesPrism(15.0, .5, top =2.54, bottom = 50.0)
     ray_span = 0.1
-    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (90, 90))
+    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (1200, 1200))
+    mirrors = MirrorTube(shape=shape)
 
-    test = mirrors.trace(rays, 25.0, plot=True)
+    # ax = shape.plot_3d()
+    # rays.plot_3d(ax=ax, distances=30.0)
+    # plt.axis('equal')
+    # plt.show()
+    out_locations,out_distances = mirrors.trace(rays,max_reflect=100,ground_z_cm= 60.0, plot=False)
+    plt.imshow(out_distances);
+    plt.colorbar()
+    plt.axis('equal')
+    plt.show()
 
 
 if __name__ == "__main__":
