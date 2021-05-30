@@ -348,7 +348,6 @@ class MirrorTube(object):
 
             palette = cm.get_cmap('brg')
             color_indices = np.linspace(0, 1.0, n + 1)
-            print(color_indices)
             colors = [palette(i) for i in color_indices]
 
             if plot:
