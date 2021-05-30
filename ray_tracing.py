@@ -227,7 +227,6 @@ class Prism(object):
         ax.set_xlim3d(np.min(self._corners_2d[:, 0]), np.max(self._corners_2d[:, 0]))
         ax.set_ylim3d(np.min(self._corners_2d[:, 1]), np.max(self._corners_2d[:, 1]))
         ax.set_zlim3d(-10.0, 100.0)
-        ax.axis('equal')
 
         return ax
 
@@ -354,6 +353,8 @@ class MirrorTube(object):
                 ax = self._facets.plot_3d()
 
             _, m_normals = self._facets.get_mirrors()
+
+            NEED TO FIX SO HITS MIRRORS FIRST, NEEDS TO MOVE ON TO GROUND IF GOING UNDER!
             for mirror_i in range(n):
                 mirror_hits = hits == mirror_i
                 idx = _double_index(active, mirror_hits)
@@ -371,8 +372,7 @@ class MirrorTube(object):
                     rays.plot_3d(2, mirror_hits, color=colors[mirror_i], ax=ax)
 
             if plot:
-                ax.axis('equal')
-                ax.set_aspect('equal')
+                ax.set_aspect('auto')
                 plt.show()
 
             to_deactivate = np.logical_or(ground_hits, all_bad)
@@ -391,17 +391,17 @@ def _double_index(mask, sub_mask):
 
 
 def test_ray_tracing():
-    # shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
-    shape = IsoscelesPrism(15.0, .5, top =2.54, bottom = 50.0)
+    shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
+    #shape = IsoscelesPrism(15.0, .5, top =2.54, bottom = 50.0)
     ray_span = 0.1
-    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (1200, 1200))
+    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (40, 40))
     mirrors = MirrorTube(shape=shape)
 
     # ax = shape.plot_3d()
     # rays.plot_3d(ax=ax, distances=30.0)
     # plt.axis('equal')
     # plt.show()
-    out_locations,out_distances = mirrors.trace(rays,max_reflect=100,ground_z_cm= 60.0, plot=False)
+    out_locations,out_distances = mirrors.trace(rays,max_reflect=100,ground_z_cm= 60.0, plot=True)
     plt.imshow(out_distances);
     plt.colorbar()
     plt.axis('equal')
