@@ -91,6 +91,8 @@ def get_index_grid(img_shape, grid_shape):
 def make_int_grid(shape):
     return np.zeros(np.prod(shape), dtype=np.int64).reshape(shape)
 
+def pct_str(n,d, fmt_str="%.3f"):
+    return fmt_str % (100.0 * n / d)
 
 def check_make_dir(path, uniquify=False):
     if os.path.exists(path):

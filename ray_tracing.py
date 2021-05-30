@@ -6,7 +6,7 @@ import matplotlib.pylab as plt
 import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from util import make_bounds
+from util import make_bounds, pct_str
 
 
 class RayBundle(object):
@@ -111,7 +111,7 @@ class RayBundle(object):
         centers, normals = prism.get_mirrors()
         dists = [self.plane_intersect_dists(centers[i, :], normals[i, :]) for i in range(prism.get_n())]
         dists = np.hstack(dists)
-        print(dists.shape)
+
         return dists
 
     def plane_intersect_dists(self, point, normal):
@@ -296,8 +296,10 @@ class MirrorTube(object):
         for iteration in range(max_reflect):
             active = rays.get_active()
             n_active = active.sum()
-            logging.info("Ray tracing iteration %i / %i - %i / %i active rays." % (iteration + 1, max_reflect,
-                                                                                   n_active, active.size))
+            logging.info("Ray tracing iteration %i / %i - %s %% rays active." % (iteration + 1,
+                                                                                 max_reflect,
+                                                                                 pct_str(n_active, active.size)))
+
 
             if np.sum(n_active) == 0:
                 logging.info('\tNo more active rays, trace complete.')
