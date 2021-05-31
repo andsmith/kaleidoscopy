@@ -470,7 +470,7 @@ def test_ray_tracing():
     #out_shape = (32, 24)
     #out_shape = (100,100)
     out_shape = (1280, 1024)
-    out_shape = (1920, 1080)
+    out_shape = (1080, 1920)
 
     ray_span_v = float(out_shape[1]) / float(out_shape[0]) * ray_span
     rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span_v, ray_span_v), 1.0, out_shape)
