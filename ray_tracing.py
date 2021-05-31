@@ -395,7 +395,7 @@ class MirrorTube(object):
                out_dists.reshape(rays.get_shape()), \
                out_reflects.reshape(rays.get_shape()),
 
-    def get_image_map(self, plot_map=True, **kwargs):
+    def get_image_map(self, plot_map=False, **kwargs):
         coords, dists, bounces = self.trace(**kwargs)
         if plot_map:
             fig, ax = plt.subplots(nrows=1, ncols=2, sharex='all', sharey='all')
@@ -457,9 +457,6 @@ def make_stained_glass(image, bounces, thresh=.5):
     else:
         image[sk] = 0
 
-    plt.imshow(image)
-    plt.show()
-
     return image
 
 
@@ -467,35 +464,55 @@ def test_ray_tracing():
     # shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
     shape = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=50.0)
     # shape = IsoscelesPrism(10.0, .5, top=2.54, bottom=50.0)
-    ray_span = 0.05
-    # rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (15,15))
-    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (500, 500))
-    #rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (1280, 1024))
-    mirrors = MirrorTube(shape=shape)
+    ray_span = 0.1
+    ground_z_cm = 60.0
+    #out_shape = (320, 240)
+    #out_shape = (32, 24)
+    #out_shape = (100,100)
+    out_shape = (1280, 1024)
+    out_shape = (1920, 1080)
 
-    # ax = shape.plot_3d()
-    # rays.plot_3d(ax=ax, distances=30.0)
-    # plt.axis('auto')
-    # plt.show()
-    # out_locations, out_distances, out_reflections = mirrors.trace(rays, max_reflect=100, ground_z_cm=60.0, plot=False)
-    img_map, dists, bounce = mirrors.get_image_map(rays=rays, max_reflect=10, ground_z_cm=60.0, plot_map=False)
+    ray_span_v = float(out_shape[1]) / float(out_shape[0]) * ray_span
+    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span_v, ray_span_v), 1.0, out_shape)
+    mirrors = MirrorTube(shape=shape)
+    # load image
+    img = Image.from_file('test_img.jpg', flip_bgr_rgb=True, px_per_cm=(150, 150))
+    print(img._span_x / 2, img._span_y / 2)
+
+    if False:
+        # plot mirrors?
+        ax = shape.plot_3d()
+
+        # plot initial rays?
+        rays.plot_3d(ax=ax, distances=30.)
+
+        # plot image
+        img.plot_3d(ax=ax, z_cm=ground_z_cm)
+
+        plt.show()
+
+    # ray-trace
+    img_map, dists, bounce = mirrors.get_image_map(rays=rays, max_reflect=30,
+                                                   ground_z_cm=ground_z_cm, plot=False)
+
     span = np.vstack((np.max(img_map.reshape(-1, 2), axis=0),
                       np.min(img_map.reshape(-1, 2), axis=0))).T
-    img = Image.from_file('gems.jpg', flip_bgr_rgb=True, px_per_cm=(200, 200))
 
-    ext = span.reshape(-1).tolist()
+    # pretty = img.interpolate(img_map,method = 'nearest')
+    pretty = img.interpolate_integer(img_map, bounce)
 
-    pretty = img.interpolate(img_map,method = 'cubic')
-    # pretty = img.interpolate_integer(img_map, bounce)
-
-    plt.imshow(pretty, extent=ext)
+    plt.imshow(pretty)
     plt.axis('equal')
     plt.show()
+    cv2.imwrite("K_out.jpg", pretty[:,:,::-1])
+
     b_img = make_stained_glass(pretty, bounce)
 
-    plt.imshow(b_img, extent=ext)
+    plt.imshow(b_img)
     plt.axis('equal')
+    cv2.imwrite("K_out_stained_glass.jpg", b_img[:,:,::-1])
     plt.show()
+
 
 
 if __name__ == "__main__":

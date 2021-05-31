@@ -4,7 +4,10 @@ import os
 import numpy as np
 import cv2
 from scipy.interpolate import griddata
-import matplotlib.pyplot as plt
+import matplotlib.pylab as plt
+import matplotlib.cm as cm
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
 class Image(object):
@@ -38,6 +41,12 @@ class Image(object):
         # return self._img.reshape(self._shape)
         return self._img
 
+    def get_scale(self):
+        return self._scale
+
+    def get_shape(self):
+        return self._shape
+
     def reset_image_coords(self):
         self._span_x = self._shape[1] / self._scale[1]
         self._span_y = self._shape[0] / self._scale[0]
@@ -58,6 +67,24 @@ class Image(object):
 
     def update_scale(self, new_scale):
         self._scale = np.array(new_scale)
+    def plot_3d(self, z_cm, ax=None):
+        """
+        plot with normal in z-1 direction, +z_cm from origin
+
+        :param z_cm: float, height
+        :param ax: axes
+        """
+        raise Exception("Not implemented!")
+        if ax is None:
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+
+        # doesn't move with pan/zoom ...
+        ax.imshow(self._img,
+                  cmap=plt.cm.BrBG,
+                  interpolation='nearest',aspect='auto',
+                  origin='lower', extent=[-self._span_x, self._span_x,
+                                          -self._span_y, self._span_y])
 
     def interpolate(self, coords, **kwargs):
         """
@@ -66,6 +93,7 @@ class Image(object):
         :param kwargs:  passed to interpolator
         :return:  H x W x 3 (RGB)  image
         """
+        t_start = time.time()
         logging.info("Interpolating on grid of coordinates:  %s" % (coords.shape,))
         colors = []
         for channel in range(self._channels):
@@ -73,19 +101,9 @@ class Image(object):
             values = self._img[:, :, channel].reshape(-1)
             qx, qy = coords[:, :, 0], coords[:, :, 1]
             colors.append(griddata(points, values, (qx, qy), **kwargs))
+        logging.info("\tInterpolation took %.6f seconds." % (time.time() - t_start))
 
         return cv2.merge(colors).astype(np.uint8)
-
-    def _analyze_coords(self, coords, bounces):
-
-        coords = coords.copy()
-        vb = (bounces != 0)
-        plt.imshow(coords[:, :, 0])
-        plt.show()
-        coords[vb, 0] = np.nan
-        coords[vb, 1] = np.nan
-        plt.imshow(coords[:, :, 0])
-        plt.show()
 
     def interpolate_integer(self, coords, bounces):
         """
@@ -99,23 +117,28 @@ class Image(object):
         :return:  H x W x 3 (RGB)  image
         """
         # self._analyze_coords(coords,bounces)
-        # logging.info("Interpolating on grid of coordinates:  %s" % (coords.shape,))
+        logging.info("Integer-interpolating on grid of coordinates:  %s" % (coords.shape,))
+        logging.info("\tImage is shape:  %s" % (self._shape, ))
+        logging.info("\tQuery spans x in [%.3f, %.3f] and y in [%.3f, %.3f]." % (
+            np.min(coords[:, :, 0]), np.max(coords[:, :, 0]),
+            np.min(coords[:, :, 1]), np.max(coords[:, :, 1])))
+
         t_start = time.time()
         out_shape = coords.shape[:2]
+        offset = np.array([self._span_x, self._span_y]).reshape(-1, 2) / 2.0
+        px_coords = (coords.reshape(-1, 2) + offset) * self._scale[::-1].reshape(-1, 2)
+        px_coords = px_coords[:, ::-1].T  # now Y, X (i.e matrix index rules, not cartesian)
+        px_coords = np.int64(px_coords)
+        valid_lo = np.logical_and(px_coords[0, :] >= 0, px_coords[1, :] >= 0)  # slow?
+        valid_hi = np.logical_and(px_coords[0, :] < self._shape[0], px_coords[1, :] < self._shape[1])
 
-        coords = (coords * self._scale.reshape(1, 2) + self._shape.reshape(1, 2) / 2.0)
-        coords = np.int64(coords.reshape(-1, 2).T)
-
-        valid_lo = np.logical_and(coords[0, :] >= 0, coords[1, :] >= 0)  # slow?
-        valid_hi = np.logical_and(coords[1, :] < self._shape[0], coords[0, :] < self._shape[1])
         valid = np.logical_and(valid_lo, valid_hi)
-
         output = np.zeros(shape=(valid.size, 3), dtype=np.uint8)
 
         for channel in range(self._channels):
-            coords_valid = coords[:, valid]
-            channel_inds = coords_valid[0, :] * 0 + channel
-            valid_pixels = self._img[(coords_valid[0, :], coords_valid[1, :], channel_inds)]
+            px_coords_valid = px_coords[:, valid]
+            channel_inds = px_coords_valid[0, :] * 0 + channel
+            valid_pixels = self._img[(px_coords_valid[0, :], px_coords_valid[1, :], channel_inds)]
             output[valid, channel] = valid_pixels
         logging.info("\tInterpolation took %.6f seconds." % (time.time() - t_start))
         return output.reshape([out_shape[0], out_shape[1], 3])
