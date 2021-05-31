@@ -446,14 +446,14 @@ def make_stained_glass(image, bounces, thresh=.5):
     plt.show()
     """
     skeleton = skeletonize(grad > thresh).astype(np.uint8)
-    kern = np.ones((2,2),dtype=np.uint8)
+    kern = np.ones((2, 2), dtype=np.uint8)
     skeleton = cv2.dilate(skeleton, kern, iterations=1)
-    sk = np.where(skeleton>0)
-    if len(image.shape)>2:
-        channel_coord = np.zeros(sk[0].size,dtype=np.int64)
+    sk = np.where(skeleton > 0)
+    if len(image.shape) > 2:
+        channel_coord = np.zeros(sk[0].size, dtype=np.int64)
         image[(sk[0], sk[1], channel_coord)] = 0
-        image[(sk[0], sk[1], channel_coord+1)] = 0
-        image[(sk[0], sk[1], channel_coord+2)] = 0
+        image[(sk[0], sk[1], channel_coord + 1)] = 0
+        image[(sk[0], sk[1], channel_coord + 2)] = 0
     else:
         image[sk] = 0
 
@@ -465,11 +465,12 @@ def make_stained_glass(image, bounces, thresh=.5):
 
 def test_ray_tracing():
     # shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
-    shape = NGonPrism(n=6, r=1.012341234, top=2.54, bottom=50.0)
+    shape = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=50.0)
     # shape = IsoscelesPrism(10.0, .5, top=2.54, bottom=50.0)
-    ray_span = 0.1
+    ray_span = 0.05
+    # rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (15,15))
     rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (500, 500))
-    # rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (1280, 1024))
+    #rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (1280, 1024))
     mirrors = MirrorTube(shape=shape)
 
     # ax = shape.plot_3d()
@@ -477,15 +478,15 @@ def test_ray_tracing():
     # plt.axis('auto')
     # plt.show()
     # out_locations, out_distances, out_reflections = mirrors.trace(rays, max_reflect=100, ground_z_cm=60.0, plot=False)
-    img_map, dists, bounce = mirrors.get_image_map(rays=rays, max_reflect=100, ground_z_cm=60.0, plot_map=False)
+    img_map, dists, bounce = mirrors.get_image_map(rays=rays, max_reflect=10, ground_z_cm=60.0, plot_map=False)
     span = np.vstack((np.max(img_map.reshape(-1, 2), axis=0),
                       np.min(img_map.reshape(-1, 2), axis=0))).T
-    img = Image.from_file('test_img.jpg', flip_bgr_rgb=True, px_per_cm=(200, 200))
-
+    img = Image.from_file('gems.jpg', flip_bgr_rgb=True, px_per_cm=(200, 200))
 
     ext = span.reshape(-1).tolist()
 
-    pretty = img.interpolate(img_map, method='cubic').astype(np.uint8)
+    pretty = img.interpolate(img_map,method = 'cubic')
+    # pretty = img.interpolate_integer(img_map, bounce)
 
     plt.imshow(pretty, extent=ext)
     plt.axis('equal')
@@ -495,6 +496,7 @@ def test_ray_tracing():
     plt.imshow(b_img, extent=ext)
     plt.axis('equal')
     plt.show()
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

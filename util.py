@@ -4,6 +4,7 @@ import os
 import numpy as np
 import cv2
 from scipy.interpolate import griddata
+import matplotlib.pyplot as plt
 
 
 class Image(object):
@@ -17,10 +18,12 @@ class Image(object):
         :param data: image (H x W x 3)
         :param px_per_cm:  image scale, (h, w)
         """
-        self._shape = data.shape
-        self._img = data.reshape(-1, self._shape[2])
-        self._scale = px_per_cm
+        self._shape = np.array(data.shape[:2])
+        self._channels = data.shape[2]
+        self._img = data
+        self._scale = np.array(px_per_cm)
         self._coords = None
+        self._span_x, self._span_y = None, None
         self.reset_image_coords()
 
     @staticmethod
@@ -32,43 +35,90 @@ class Image(object):
         return Image(data, **kwargs)
 
     def get_image(self):
-        return self._img.reshape(self._shape)
+        # return self._img.reshape(self._shape)
+        return self._img
 
+    def reset_image_coords(self):
+        self._span_x = self._shape[1] / self._scale[1]
+        self._span_y = self._shape[0] / self._scale[0]
+        x_coords = np.linspace(-self._span_x / 2, self._span_x / 2, self._shape[1])
+        y_coords = np.linspace(-self._span_y / 2, self._span_y / 2, self._shape[0])
+        self._coords = np.dstack(np.meshgrid(x_coords, y_coords)).reshape(-1, 2)
+
+        logging.info("Reset image coordinates to:  %s x %s (x,y - cm)" % (self._span_x, self._span_y))
+
+    """
     def get_coords(self):
         return self._coords.reshape(list(self._img.shape[:2]) + [2])
 
-    def reset_image_coords(self):
-
-        span_x = self._shape[1] / self._scale[1]
-        span_y = self._shape[0] / self._scale[0]
-        x_coords = np.linspace(-span_x, span_x, self._shape[1])
-        y_coords = np.linspace(-span_y, span_y, self._shape[0])
-        self._coords = np.dstack(np.meshgrid(x_coords, y_coords)).reshape(-1, 2)
-        logging.info("Reset image coordinates to:  %s x %s (x,y - cm)" % (span_x, span_y))
+    """
 
     def update_image(self, new_data):
-        if not np.array_equal(new_data.shape, self._img.shape):
-            raise Exception("Update image must have same shape.")
-        self._img = new_data.reshape(-1, new_data.shape[2])
+        self._img = new_data
 
     def update_scale(self, new_scale):
-        self._scale = new_scale
+        self._scale = np.array(new_scale)
 
     def interpolate(self, coords, **kwargs):
         """
-        get image interpolated at specified world coordinates
+        get image interpolated at specified world coordinates using scipy interpolation.
         :param coords: H x W x 2 (x, y coordinates) in world-frame
         :param kwargs:  passed to interpolator
         :return:  H x W x 3 (RGB)  image
         """
         logging.info("Interpolating on grid of coordinates:  %s" % (coords.shape,))
         colors = []
-        for channel in range(self._img.shape[1]):
-            colors.append(griddata(self._coords,
-                                   self._img[:, channel],
-                                   (coords[:, :, 0], coords[:, :, 1]),
-                                   **kwargs))
-        return cv2.merge(colors)
+        for channel in range(self._channels):
+            points = self._coords
+            values = self._img[:, :, channel].reshape(-1)
+            qx, qy = coords[:, :, 0], coords[:, :, 1]
+            colors.append(griddata(points, values, (qx, qy), **kwargs))
+
+        return cv2.merge(colors).astype(np.uint8)
+
+    def _analyze_coords(self, coords, bounces):
+
+        coords = coords.copy()
+        vb = (bounces != 0)
+        plt.imshow(coords[:, :, 0])
+        plt.show()
+        coords[vb, 0] = np.nan
+        coords[vb, 1] = np.nan
+        plt.imshow(coords[:, :, 0])
+        plt.show()
+
+    def interpolate_integer(self, coords, bounces):
+        """
+        Get image at specified world coordinates, using nearest pixel (integer truncation).
+        Should be faster than actual interpolation.
+
+        FUTURE :  improve smoothness by scaling up image & blurring
+
+        :param coords: H x W x 2 (x, y coordinates) in world-coords
+
+        :return:  H x W x 3 (RGB)  image
+        """
+        # self._analyze_coords(coords,bounces)
+        # logging.info("Interpolating on grid of coordinates:  %s" % (coords.shape,))
+        t_start = time.time()
+        out_shape = coords.shape[:2]
+
+        coords = (coords * self._scale.reshape(1, 2) + self._shape.reshape(1, 2) / 2.0)
+        coords = np.int64(coords.reshape(-1, 2).T)
+
+        valid_lo = np.logical_and(coords[0, :] >= 0, coords[1, :] >= 0)  # slow?
+        valid_hi = np.logical_and(coords[1, :] < self._shape[0], coords[0, :] < self._shape[1])
+        valid = np.logical_and(valid_lo, valid_hi)
+
+        output = np.zeros(shape=(valid.size, 3), dtype=np.uint8)
+
+        for channel in range(self._channels):
+            coords_valid = coords[:, valid]
+            channel_inds = coords_valid[0, :] * 0 + channel
+            valid_pixels = self._img[(coords_valid[0, :], coords_valid[1, :], channel_inds)]
+            output[valid, channel] = valid_pixels
+        logging.info("\tInterpolation took %.6f seconds." % (time.time() - t_start))
+        return output.reshape([out_shape[0], out_shape[1], 3])
 
 
 class TextManager(object):
