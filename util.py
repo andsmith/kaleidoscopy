@@ -1,11 +1,76 @@
+import logging
 import time
 import os
 import numpy as np
 import cv2
+from scipy.interpolate import griddata
+
+
+class Image(object):
+    """
+    Handle image transformations & interpolation
+    """
+
+    def __init__(self, data, px_per_cm=(100., 100.)):
+        """
+
+        :param data: image (H x W x 3)
+        :param px_per_cm:  image scale, (h, w)
+        """
+        self._shape = data.shape
+        self._img = data.reshape(-1, self._shape[2])
+        self._scale = px_per_cm
+        self._coords = None
+        self.reset_image_coords()
+
+    @staticmethod
+    def from_file(filename, flip_bgr_rgb=False, **kwargs):
+        data = cv2.imread(filename)
+        if flip_bgr_rgb:
+            data = data[:, :, ::-2]
+        return Image(data, **kwargs)
+
+    def reset_image_coords(self):
+
+        span_x = self._shape[1] / self._scale[1]
+        span_y = self._shape[0] / self._scale[0]
+        x_coords = np.linspace(-span_x, span_x, self._shape[1])
+        y_coords = np.linspace(-span_y, span_y, self._shape[0])
+        self._coords = np.dstack(np.meshgrid(x_coords, y_coords)).reshape(-1, 2)
+        print("Reset image coordinates to:  %s x %s (x,y - cm)" % (span_x, span_y))
+
+    def update_image(self, new_data):
+        if not np.array_equal(new_data.shape, self._img.shape):
+            raise Exception("Update image must have same shape.")
+        self._img = new_data.reshape(-1, new_data.shape[2])
+
+    def update_scale(self, new_scale):
+        self._scale = new_scale
+
+    def interpolate(self, coords, **kwargs):
+        """
+        get image interpolated at specified world coordinates
+        :param coords: H x W x 2 (x, y coordinates) in world-frame
+        :param kwargs:  passed to interpolator
+        :return:  H x W x 3 (RGB)  image
+        """
+        logging.info("Interpolating on grid of coordinates:  %s" % (coords.shape, ))
+        colors = []
+        print(self._coords.shape)
+        print(self._img[:,0].shape)
+        for channel in range(self._img.shape[1]):
+            colors.append(griddata(self._coords,
+                                   self._img[:, channel],
+                                   (coords[:, :, 0], coords[:, :, 1]),
+                                   **kwargs))
+        import pprint
+        pprint.pprint(colors)
+        import ipdb;
+        ipdb.set_trace()
+        return cv2.merge(colors)
 
 
 class TextManager(object):
-
     """
     For adding text to output streams.
     "Set it and forget it" -- add text with expiration times, etc.
@@ -77,7 +142,7 @@ class TextManager(object):
         for t in self._items:
             image = cv2.putText(image, t['text'], t['pos'], t['font'], t['fontScale'], t['color'], t['thickness'],
                                 t['linestyle'])
-        singles_removed = [i for i in self._items if i['age']>=0]
+        singles_removed = [i for i in self._items if i['age'] >= 0]
         self._items = singles_removed
         return image
 
@@ -91,8 +156,10 @@ def get_index_grid(img_shape, grid_shape):
 def make_int_grid(shape):
     return np.zeros(np.prod(shape), dtype=np.int64).reshape(shape)
 
-def pct_str(n,d, fmt_str="%.3f"):
+
+def pct_str(n, d, fmt_str="%.3f"):
     return fmt_str % (100.0 * n / d)
+
 
 def check_make_dir(path, uniquify=False):
     if os.path.exists(path):
@@ -118,6 +185,7 @@ def test_text_manager():
     plt.imshow(tm.render(img))
     plt.show()
     """
+
 
 if __name__ == "__main__":
     test_text_manager()

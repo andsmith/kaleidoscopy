@@ -6,7 +6,7 @@ import matplotlib.pylab as plt
 import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from util import make_bounds, pct_str
+from util import make_bounds, pct_str, Image
 
 
 class RayBundle(object):
@@ -237,12 +237,20 @@ class Prism(object):
 class IsoscelesPrism(Prism):
     def __init__(self, theta_deg, h_cm, **kwargs):
         theta = np.deg2rad(theta_deg)
-        corners = [np.array([-np.sin(theta), -h_cm/2]),
-                   np.array([0, h_cm/2]),
-                   np.array([np.sin(theta), -h_cm/2]), ]
-
-
+        corners = [np.array([-np.sin(theta), -h_cm / 2]),
+                   np.array([0, h_cm / 2]),
+                   np.array([np.sin(theta), -h_cm / 2]), ]
+        corners = np.array(corners + corners[0])
         super(IsoscelesPrism, self).__init__(corners=corners, **kwargs)
+
+
+class NGonPrism(Prism):
+    def __init__(self, n, r, **kwargs):
+        logging.info("Making N-gon prism with n=%i, radius %.4f cm." % (n, r))
+
+        theta = np.linspace(0, 2.0 * np.pi, n + 1)
+        corners = np.vstack((np.cos(theta) * r, np.sin(theta) * r)).T
+        super(NGonPrism, self).__init__(corners=corners, **kwargs)
 
 
 class RectangularPrism(Prism):
@@ -253,6 +261,8 @@ class RectangularPrism(Prism):
                    np.array([-hw, hh]),
                    np.array([hw, hh]),
                    np.array([hw, -hh])]
+        corners = np.array(corners + corners[0])
+
         super(RectangularPrism, self).__init__(corners=corners, **kwargs)
 
 
@@ -279,7 +289,8 @@ class MirrorTube(object):
         :param ground_z_cm:  when rays exit tube, how far back to ground plane / image?
         :param max_reflect:  how many reflections before ray is considered not hitting ground plane?
         :return:  tuple(H x W x 3 array of ray destinations on the ground plane, or NAN if not hitting,
-                        H x W x 3 array of ray distances traveled, or NAN if not hitting)
+                        H x W array of ray distances traveled, or NAN if not hitting)
+                        H x W array of number of reflections, or -1 if not hitting)
         """
 
         ground_center = np.array([0.0, 0.0, ground_z_cm]).reshape(1, -1)
@@ -287,6 +298,7 @@ class MirrorTube(object):
 
         out_points = np.zeros(shape=list(rays.get_shape()) + [3])
         out_dists = np.zeros(shape=list(rays.get_shape()))
+        out_reflects = np.zeros(shape=list(rays.get_shape()), dtype=np.int64) - 1
 
         # remember these so as to not hit same thing twice (-1 means invalid, n+1 means ground (bounce!))
         last_hits = np.zeros(np.prod(rays.get_shape()), dtype=np.int64) - 1
@@ -298,7 +310,6 @@ class MirrorTube(object):
             logging.info("Ray tracing iteration %i / %i - %s %% rays active." % (iteration + 1,
                                                                                  max_reflect,
                                                                                  pct_str(n_active, active.size)))
-
 
             if np.sum(n_active) == 0:
                 logging.info('\tNo more active rays, trace complete.')
@@ -341,6 +352,7 @@ class MirrorTube(object):
             idx = _double_index(active, ground_hits)
             out_points[idx] = intersects
             out_dists[idx] = ground_dists[ground_hits].reshape(-1)
+            out_reflects[idx] = iteration
             last_hits[idx.reshape(-1)] = n
 
             # Hit a mirror?  Reflect.
@@ -354,7 +366,7 @@ class MirrorTube(object):
 
             _, m_normals = self._facets.get_mirrors()
 
-            NEED TO FIX SO HITS MIRRORS FIRST, NEEDS TO MOVE ON TO GROUND IF GOING UNDER!
+            # NEED TO FIX SO HITS MIRRORS FIRST, NEEDS TO MOVE ON TO GROUND IF GOING UNDER!
             for mirror_i in range(n):
                 mirror_hits = hits == mirror_i
                 idx = _double_index(active, mirror_hits)
@@ -378,7 +390,21 @@ class MirrorTube(object):
             to_deactivate = np.logical_or(ground_hits, all_bad)
             rays.deactivate(to_deactivate)
 
-        return out_points.reshape(list(rays.get_shape()) + [3]), out_dists.reshape(rays.get_shape())
+        return out_points.reshape(list(rays.get_shape()) + [3]), \
+               out_dists.reshape(rays.get_shape()), \
+               out_reflects.reshape(rays.get_shape()),
+
+    def get_image_map(self, plot_map=True, **kwargs):
+        coords, dists, bounces = self.trace(**kwargs)
+        if plot_map:
+            fig, ax = plt.subplots(nrows=1, ncols=2, sharex='all', sharey='all')
+            ax[0].imshow(dists)
+            ax[1].imshow(bounces)
+            plt.suptitle("Image map, distances in [%.3f, %.3f], bounces in [%.i, %.i]." % (
+                np.min(dists), np.max(dists), np.min(bounces), np.max(bounces)))
+        plt.show()
+
+        return coords[:, :, :2]
 
 
 def _double_index(mask, sub_mask):
@@ -390,21 +416,31 @@ def _double_index(mask, sub_mask):
     return r
 
 
+
+
 def test_ray_tracing():
-    shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
-    #shape = IsoscelesPrism(15.0, .5, top =2.54, bottom = 50.0)
+    # shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
+    shape = NGonPrism(n=6, r=1.012341234, top=2.54, bottom=50.0)
+    # shape = IsoscelesPrism(5.0, .5, top=2.54, bottom=50.0)
     ray_span = 0.1
-    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (40, 40))
+    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (230, 230))
+    # rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (1024, 1024))
     mirrors = MirrorTube(shape=shape)
 
     # ax = shape.plot_3d()
     # rays.plot_3d(ax=ax, distances=30.0)
-    # plt.axis('equal')
+    # plt.axis('auto')
     # plt.show()
-    out_locations,out_distances = mirrors.trace(rays,max_reflect=100,ground_z_cm= 60.0, plot=True)
-    plt.imshow(out_distances);
-    plt.colorbar()
-    plt.axis('equal')
+    # out_locations, out_distances, out_reflections = mirrors.trace(rays, max_reflect=100, ground_z_cm=60.0, plot=False)
+    img_map = mirrors.get_image_map(rays=rays, max_reflect=100, ground_z_cm=60.0, plot_map=True)
+    span = np.vstack((np.max(img_map.reshape(-1, 2), axis=0),
+                      np.min(img_map.reshape(-1, 2), axis=0))).T
+    print(span)
+    img = Image.from_file('test_img.jpg')
+    ext = span.reshape(-1).tolist()
+    print(ext)
+    pretty = img.interpolate(img_map,method='cubic')
+    plt.imshow(pretty)
     plt.show()
 
 
