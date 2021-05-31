@@ -105,7 +105,7 @@ class Image(object):
 
         return cv2.merge(colors).astype(np.uint8)
 
-    def interpolate_integer(self, coords, bounces):
+    def interpolate_integer(self, coords):
         """
         Get image at specified world coordinates, using nearest pixel (integer truncation).
         Should be faster than actual interpolation.

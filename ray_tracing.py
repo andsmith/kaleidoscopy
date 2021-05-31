@@ -47,8 +47,9 @@ class RayBundle(object):
         """
         px = np.linspace(x_span[0], x_span[1], res[1])
         py = np.linspace(y_span[0], y_span[1], res[0])
+
         x, y = np.meshgrid(px, py)
-        img_coords = np.dstack((y, x, np.ones(x.shape) * z))
+        img_coords = np.dstack((x, y, np.ones(x.shape) * z))
 
         # Create rays
         eye = np.zeros(3).reshape(1, 3)
@@ -464,20 +465,19 @@ def test_ray_tracing():
     # shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
     shape = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=50.0)
     # shape = IsoscelesPrism(10.0, .5, top=2.54, bottom=50.0)
-    ray_span = 0.1
+    ray_span = 0.15
     ground_z_cm = 60.0
     #out_shape = (320, 240)
     #out_shape = (32, 24)
     #out_shape = (100,100)
-    out_shape = (1280, 1024)
     out_shape = (1080, 1920)
 
     ray_span_v = float(out_shape[1]) / float(out_shape[0]) * ray_span
-    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span_v, ray_span_v), 1.0, out_shape)
+    rays = RayBundle.from_origin_to_plane((-ray_span_v/2, ray_span_v/2), (-ray_span/2, ray_span/2), 1.0, out_shape)
+
     mirrors = MirrorTube(shape=shape)
     # load image
     img = Image.from_file('test_img.jpg', flip_bgr_rgb=True, px_per_cm=(150, 150))
-    print(img._span_x / 2, img._span_y / 2)
 
     if False:
         # plot mirrors?
@@ -498,8 +498,8 @@ def test_ray_tracing():
     span = np.vstack((np.max(img_map.reshape(-1, 2), axis=0),
                       np.min(img_map.reshape(-1, 2), axis=0))).T
 
-    # pretty = img.interpolate(img_map,method = 'nearest')
-    pretty = img.interpolate_integer(img_map, bounce)
+    pretty = img.interpolate(img_map,method = 'nearest')
+    # pretty = img.interpolate_integer(img_map, bounce)
 
     plt.imshow(pretty)
     plt.axis('equal')
