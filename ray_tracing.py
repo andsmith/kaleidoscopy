@@ -465,10 +465,10 @@ def make_stained_glass(image, bounces, thresh=.5):
 
 def test_ray_tracing():
     # shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
-    # shape = NGonPrism(n=6, r=1.012341234, top=2.54, bottom=50.0)
-    shape = IsoscelesPrism(10.0, .5, top=2.54, bottom=50.0)
+    shape = NGonPrism(n=6, r=1.012341234, top=2.54, bottom=50.0)
+    # shape = IsoscelesPrism(10.0, .5, top=2.54, bottom=50.0)
     ray_span = 0.1
-    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (400, 400))
+    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (500, 500))
     # rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (1280, 1024))
     mirrors = MirrorTube(shape=shape)
 
