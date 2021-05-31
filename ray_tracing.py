@@ -7,6 +7,7 @@ import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from util import make_bounds, pct_str, Image
+from skimage.morphology import skeletonize
 
 
 class RayBundle(object):
@@ -248,7 +249,7 @@ class NGonPrism(Prism):
     def __init__(self, n, r, **kwargs):
         logging.info("Making N-gon prism with n=%i, radius %.4f cm." % (n, r))
 
-        theta = np.linspace(0, 2.0 * np.pi, n + 1)
+        theta = np.linspace(0, 2.0 * np.pi, n + 1)[:-1]
         corners = np.vstack((np.cos(theta) * r, np.sin(theta) * r)).T
         super(NGonPrism, self).__init__(corners=corners, **kwargs)
 
@@ -404,7 +405,7 @@ class MirrorTube(object):
                 np.min(dists), np.max(dists), np.min(bounces), np.max(bounces)))
         plt.show()
 
-        return coords[:, :, :2]
+        return coords[:, :, :2], dists, bounces
 
 
 def _double_index(mask, sub_mask):
@@ -416,15 +417,59 @@ def _double_index(mask, sub_mask):
     return r
 
 
+def make_stained_glass(image, bounces, thresh=.5):
+    bounces = bounces.astype(np.uint8)
+    laplacian = cv2.Laplacian(bounces, cv2.CV_64F)
+    grad = laplacian  # np.sqrt(sobely * sobely + sobelx * sobelx)
+    """
+    sobelx = cv2.Sobel(bounces, cv2.CV_64F, 1, 0, ksize=5)
+    sobely = cv2.Sobel(bounces, cv2.CV_64F, 0, 1, ksize=5)
+    
+    ksizes = [3, 5, 7, 9]
+    sigmaxs = [0.5, 1.0, 1.5, 3.0, ]
+    ind=0
+    for ki, ksize in enumerate(ksizes):
+        for si, sigmax in enumerate(sigmaxs):
+            ind+=1
+            plt.subplot(len(ksizes), len(sigmaxs), ind)
+            blurred = cv2.GaussianBlur(np.uint8(laplacian > 0.001),
+                                       ksize=ksize,
+                                       sigmaX=sigmax,
+                                       borderType=cv2.BORDER_REFLECT)
+            plt.imshow(blurred)
+            plt.xlabel("%i, %.2f" % (ksize, sigmax))
+    plt.show()
+
+
+    plt.imshow(b)
+    plt.colorbar()
+    plt.show()
+    """
+    skeleton = skeletonize(grad > thresh).astype(np.uint8)
+    kern = np.ones((2,2),dtype=np.uint8)
+    skeleton = cv2.dilate(skeleton, kern, iterations=1)
+    sk = np.where(skeleton>0)
+    if len(image.shape)>2:
+        channel_coord = np.zeros(sk[0].size,dtype=np.int64)
+        image[(sk[0], sk[1], channel_coord)] = 0
+        image[(sk[0], sk[1], channel_coord+1)] = 0
+        image[(sk[0], sk[1], channel_coord+2)] = 0
+    else:
+        image[sk] = 0
+
+    plt.imshow(image)
+    plt.show()
+
+    return image
 
 
 def test_ray_tracing():
     # shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
-    shape = NGonPrism(n=6, r=1.012341234, top=2.54, bottom=50.0)
-    # shape = IsoscelesPrism(5.0, .5, top=2.54, bottom=50.0)
+    # shape = NGonPrism(n=6, r=1.012341234, top=2.54, bottom=50.0)
+    shape = IsoscelesPrism(10.0, .5, top=2.54, bottom=50.0)
     ray_span = 0.1
-    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (230, 230))
-    # rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (1024, 1024))
+    rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (400, 400))
+    # rays = RayBundle.from_origin_to_plane((-ray_span, ray_span), (-ray_span, ray_span), 1.0, (1280, 1024))
     mirrors = MirrorTube(shape=shape)
 
     # ax = shape.plot_3d()
@@ -432,17 +477,24 @@ def test_ray_tracing():
     # plt.axis('auto')
     # plt.show()
     # out_locations, out_distances, out_reflections = mirrors.trace(rays, max_reflect=100, ground_z_cm=60.0, plot=False)
-    img_map = mirrors.get_image_map(rays=rays, max_reflect=100, ground_z_cm=60.0, plot_map=True)
+    img_map, dists, bounce = mirrors.get_image_map(rays=rays, max_reflect=100, ground_z_cm=60.0, plot_map=False)
     span = np.vstack((np.max(img_map.reshape(-1, 2), axis=0),
                       np.min(img_map.reshape(-1, 2), axis=0))).T
-    print(span)
-    img = Image.from_file('test_img.jpg')
-    ext = span.reshape(-1).tolist()
-    print(ext)
-    pretty = img.interpolate(img_map,method='cubic')
-    plt.imshow(pretty)
-    plt.show()
+    img = Image.from_file('test_img.jpg', flip_bgr_rgb=True, px_per_cm=(200, 200))
 
+
+    ext = span.reshape(-1).tolist()
+
+    pretty = img.interpolate(img_map, method='cubic').astype(np.uint8)
+
+    plt.imshow(pretty, extent=ext)
+    plt.axis('equal')
+    plt.show()
+    b_img = make_stained_glass(pretty, bounce)
+
+    plt.imshow(b_img, extent=ext)
+    plt.axis('equal')
+    plt.show()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

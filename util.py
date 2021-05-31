@@ -26,9 +26,16 @@ class Image(object):
     @staticmethod
     def from_file(filename, flip_bgr_rgb=False, **kwargs):
         data = cv2.imread(filename)
+        logging.info('Loading image "%s":  %s.' % (filename, data.shape))
         if flip_bgr_rgb:
-            data = data[:, :, ::-2]
+            data = data[:, :, ::-1]
         return Image(data, **kwargs)
+
+    def get_image(self):
+        return self._img.reshape(self._shape)
+
+    def get_coords(self):
+        return self._coords.reshape(list(self._img.shape[:2]) + [2])
 
     def reset_image_coords(self):
 
@@ -37,7 +44,7 @@ class Image(object):
         x_coords = np.linspace(-span_x, span_x, self._shape[1])
         y_coords = np.linspace(-span_y, span_y, self._shape[0])
         self._coords = np.dstack(np.meshgrid(x_coords, y_coords)).reshape(-1, 2)
-        print("Reset image coordinates to:  %s x %s (x,y - cm)" % (span_x, span_y))
+        logging.info("Reset image coordinates to:  %s x %s (x,y - cm)" % (span_x, span_y))
 
     def update_image(self, new_data):
         if not np.array_equal(new_data.shape, self._img.shape):
@@ -54,19 +61,13 @@ class Image(object):
         :param kwargs:  passed to interpolator
         :return:  H x W x 3 (RGB)  image
         """
-        logging.info("Interpolating on grid of coordinates:  %s" % (coords.shape, ))
+        logging.info("Interpolating on grid of coordinates:  %s" % (coords.shape,))
         colors = []
-        print(self._coords.shape)
-        print(self._img[:,0].shape)
         for channel in range(self._img.shape[1]):
             colors.append(griddata(self._coords,
                                    self._img[:, channel],
                                    (coords[:, :, 0], coords[:, :, 1]),
                                    **kwargs))
-        import pprint
-        pprint.pprint(colors)
-        import ipdb;
-        ipdb.set_trace()
         return cv2.merge(colors)
 
 
@@ -117,7 +118,7 @@ class TextManager(object):
         :param kwargs: additional args to add_text
         :return:  lower left corner of last line of text
         """
-        print("Adding lines")
+
         px = pos[0]
         py = pos[1]
         for line in lines:
@@ -131,7 +132,7 @@ class TextManager(object):
     def _check_ages(self):
         valid = [i for i in self._items if i['age'] <= 0 or time.time() - i['start'] < i['age']]
         if len(valid) < len(self._items):
-            print("Aged out!")
+            logging.info("Text item(s) aged out.")
         self._items = valid
 
     def render(self, img):
@@ -173,6 +174,10 @@ def check_make_dir(path, uniquify=False):
     else:
         os.mkdir(path)
     return path
+
+
+def test_image():
+    pic = Image.from_file('test_img.jpg')
 
 
 def test_text_manager():
