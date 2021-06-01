@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 import logging
 import time
-import matplotlib.pylab as plt
+#import matplotlib.pylab as plt
 import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -423,7 +423,7 @@ class MirrorTube(object):
             ax[1].imshow(bounces)
             plt.suptitle("Image map, distances in [%.3f, %.3f], bounces in [%.i, %.i]." % (
                 np.min(dists), np.max(dists), np.min(bounces), np.max(bounces)))
-        plt.show()
+            plt.show()
 
         return coords[:, :, :2], dists, bounces
 

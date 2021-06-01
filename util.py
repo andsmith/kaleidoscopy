@@ -4,7 +4,7 @@ import os
 import numpy as np
 import cv2
 from scipy.interpolate import griddata
-import matplotlib.pylab as plt
+# import matplotlib.pylab as plt
 import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -117,11 +117,11 @@ class Image(object):
         :return:  H x W x 3 (RGB)  image
         """
         # self._analyze_coords(coords,bounces)
-        logging.info("Integer-interpolating on grid of coordinates:  %s" % (coords.shape,))
-        logging.info("\tImage is shape:  %s" % (self._shape, ))
-        logging.info("\tQuery spans x in [%.3f, %.3f] and y in [%.3f, %.3f]." % (
-            np.min(coords[:, :, 0]), np.max(coords[:, :, 0]),
-            np.min(coords[:, :, 1]), np.max(coords[:, :, 1])))
+        #logging.info("Integer-interpolating on grid of coordinates:  %s" % (coords.shape,))
+        #logging.info("\tImage is shape:  %s" % (self._shape, ))
+        #logging.info("\tQuery spans x in [%.3f, %.3f] and y in [%.3f, %.3f]." % (
+        #    np.min(coords[:, :, 0]), np.max(coords[:, :, 0]),
+        #    np.min(coords[:, :, 1]), np.max(coords[:, :, 1])))
 
         t_start = time.time()
         out_shape = coords.shape[:2]
@@ -140,7 +140,7 @@ class Image(object):
             channel_inds = px_coords_valid[0, :] * 0 + channel
             valid_pixels = self._img[(px_coords_valid[0, :], px_coords_valid[1, :], channel_inds)]
             output[valid, channel] = valid_pixels
-        logging.info("\tInterpolation took %.6f seconds." % (time.time() - t_start))
+        #logging.info("\tInterpolation took %.6f seconds." % (time.time() - t_start))
         return output.reshape([out_shape[0], out_shape[1], 3])
 
     def set_image(self, image):
@@ -156,7 +156,7 @@ class TextManager(object):
     def __init__(self):
         self._items = []
 
-    def add_text(self, text, pos, age=0, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=1, color=(255, 255, 255),
+    def add_text(self, text, pos, age=0, font=cv2.FONT_HERSHEY_PLAIN, font_scale=1, color=(255, 255, 255),
                  thickness=1, linestyle=cv2.LINE_AA):
         """
         Most args are for cv2 puttext.
