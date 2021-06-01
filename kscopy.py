@@ -2,49 +2,50 @@ import numpy as np
 import cv2
 import logging
 import time
-from util import make_bounds, TextManager
+from util import make_bounds, TextManager, Image
 import threading
-from ray_tracing import IsoscelesMirrorTube, make_rays
+from ray_tracing import RayBundle, NGonPrism, MirrorTube
 
 
 class Kaleidoscope(object):
+    """
+    Handle  video.
+    """
 
     def __init__(self,
-                 mirrors=None,
-                 resolution=(1024, 800),
-                 fov_deg=45.0,
-                 eye_scope_cm=4.0,
-                 scope_image_scm=20.0):
+                 mirrors,
+                 output_resolution=(240, 320),
+                 fov_x_deg=45.0,
+                 ground_z_dist_cm=60.0,
+                 image_plane_cm=4.0):
         """
-        Kaleidoscope object, main GUI.
-        :param mirrors: MirrorAssmebly object, defaults to Isosceles triangle if None
-        :param resolution:  h, w (output)
-        :param fov_deg:  field of view
-        :param eye_scope_cm:  distance, float
-        :param scope_image_scm:  distance, float
-        """
-        # params
+        Geometry already defined
+        :param mirrors:  MirrorTube object
+        :param output_resolution:  (h, w) pixels
+        :param fov_x_deg:  field of view for the h pixels
+        :param ground_z_dist_cm:  added to bottom of kaleidoscope before image/video.
+        """  # params
         theta_deg = 15.0
-        self._resolution = resolution
-        self._mirrors = IsoscelesMirrorTube(theta_deg=theta_deg, h_cm=5.0) if mirrors is None else mirrors
-        self._dims = {'eye_scope_cm': eye_scope_cm,
-                      'fov': np.deg2rad(fov_deg),
-                      'scope_img_cm': scope_image_scm,
-                      'theta_deg': theta_deg}
-        self._img_plane_cm = 1.0  # arbitrarily?
+        self._output_resolution = output_resolution
+        self._input_resolution = None
+        self._mirrors = mirrors
+
+        self._ground_z = ground_z_dist_cm + self._mirrors.get_vertical_span()[0]
+        self._image_plane_z = image_plane_cm
+        self._fov_x_deg = fov_x_deg
+        self._rays = None
+        self._img_map, self._dists, self._bounce = None, None, None
+
+        self._set_rays()
 
         # state
         self._running = False
         self._finish = False
-        i, j = np.arange(resolution[0]), np.arange(resolution[1])
-        self._all_coords = np.dstack(np.meshgrid(i, j)).reshape(-1, 2)
-        self._cur_img = None
+
         self._ray_map = None
-        self._image = None
-        self._frame_in = None
+        self._image_in = None
+        self._image_out = None
         self._fps_out = 1.0 / 0.010
-        self._image_bounds = None
-        self._dpi = None
         self._live = None
         self._cam = None
 
@@ -66,7 +67,19 @@ class Kaleidoscope(object):
                              "abs_coords": None}
         cv2.setMouseCallback(self._out_window_name, self._mouse_event)
 
+    def _set_rays(self):
+        self._rays = RayBundle.from_resolution_and_fov(self._output_resolution,
+                                                       self._image_plane_z,
+                                                       fov_x_deg=self._fov_x_deg)
+
+    def _set_image_map(self):
+        self._img_map, self._dists, self._bounce = self._mirrors.get_image_map(rays=self._rays,
+                                                                               max_reflect=30,
+                                                                               ground_z_cm=self._ground_z,
+                                                                               plot=False)
+
     def _image_proc(self):
+        """
         while not self._finish:
             if self._cur_img is None:
                 logging.warning("No image to display.")
@@ -76,41 +89,17 @@ class Kaleidoscope(object):
             cv2.imshow(self._out_window_name, image)
             k = cv2.waitKey(int(1.0 / self._fps_out))  # time this better...
             self._do_keyboard(k)
+        """
+        raise NotImplementedError()
 
     def quit(self):
         self.stop()
         self.shutdown()
 
-    def _adjust(self, param, dir):
-        if param not in self._dims:
-            raise Exception("parameter not found in dims:  %s" % (param,))
-        self._dims[param] += dir
-        self._generate_ray_map()
-
     def _make_hotkeys(self):
-        def _toggle_state():
-            if self._running:
-                self.stop()
-            else:
-                self.start()
 
         return {'q': {'name': 'Quit',
                       'dispatch': self.quit},
-                ' ': {'alt': '[SPACE]',
-                      'name': 'Start / Stop',
-                      'dispatch': _toggle_state},
-                'a': {'name': "Increase eye-scope distance.",
-                      'dispatch': self._adjust,
-                      'params': ("eye_scope_cm", 1)},
-                'z': {'name': "Decrease eye-scope distance.",
-                      'dispatch': self._adjust,
-                      'params': ("eye_scope_cm", -1)},
-                's': {'name': "Increase scope-image distance.",
-                      'dispatch': self._adjust,
-                      'params': ("scope_image_cm", 1)},
-                'x': {'name': "Decrease scope-image distance.",
-                      'dispatch': self._adjust,
-                      'params': ("scope_image_cm", -1)},
                 }
 
     def _do_keyboard(self, k):
@@ -130,7 +119,8 @@ class Kaleidoscope(object):
         if self._image is None:
             fps_in = self._n_in_frames / (time.time() - self._start_t)
             fps_out = "FPS in:  %.3f -- %s" % (fps_in, fps_out)
-        self._text.add_text(fps_out, pos=(self._resolution[0] - 30, 30), age=-1)
+            # reset?
+        self._text.add_text(fps_out, pos=(self._output_resolution[0] - 30, 30), age=-1)
         logging.info(fps_out)
         return self._text.render(img)
 
@@ -147,11 +137,11 @@ class Kaleidoscope(object):
             self._cam_thread.join()
 
     def _setup(self):
+        self._n_in_frames = 0
         self._n_out_frames = 0
         self._start_t = time.time()
         self._finish = False
         self._started = True
-        self._update_ray_map()
 
     def view_image(self, image, dpi=100.0):
         logging.info("Starting with image:  %s (%s dpi)" % (self._image.shape, self._dpi))
@@ -162,12 +152,11 @@ class Kaleidoscope(object):
         self._image_proc()
         logging.info("Image view Stopped.")
 
-    def view_live(self, cam_ind):
+    def view_live(self, cam_ind=None):
         self._cam_ind = cam_ind
         logging.info("Starting live!")
-        self._setup()
         self._cam_thread = threading.Thread(target=self._cam_proc)
-        self._n_in_frames = None
+        self._setup()
         self._cam_thread.start()
         logging.info("Live view started...")
 
@@ -186,37 +175,27 @@ class Kaleidoscope(object):
         logging.info("Live view stopped.")
 
     def _update_out_image(self):
-        return np.zeros(shape=self._resolution)
+        image = self._frame_in.copy()
 
-    def _update_ray_map(self):
-        """
-        Calculate a new map from input to output (pixels):
-            1. Determine pixel locations in image plane, spaced so larger dimension fits FOV exactly.
-            2. Project rays from eye, through pixel locations, bounce off mirrors, eventually (?) hit image
+        if self._img_map is None:
+            # do setup we couldn't until now
+            self._input_resolution = self._frame_in.shape[:2]
+            self._set_rays()
+            self._set_image_map()
+            self._interp_image = Image(image, self._input_resolution)
 
-        :return:
-        """
-        logging.info("Recalculating ray map:")
-        logging.info("\tResolution:  %s" % (self._resolution,))
+            # return input img + msg
+            msg = "ray-tracing.."
+            self._text.add_text(msg, pos=(30, 30), age=-1)
+            return self._text.render(image)
 
-        # get span of fov at image plane
-        fov_span = np.sin(self._dims['fov'] / 2.0) * self._img_plane_cm * 2.0
-        if self._resolution[0] > self._resolution[1]:
-            # higher than wide
-            px_per_cm = float(self._resolution[0]) / fov_span
-        else:
-            # wider than high
-            px_per_cm = float(self._resolution[1]) / fov_span
-        x_span = float(self._resolution[1]) / px_per_cm / 2.0
-        y_span = float(self._resolution[0]) / px_per_cm / 2.0
-        logging.info("\tSpan:  x(+/-):  %.3f,  y(+/-):  %.3f" % (x_span, y_span,))
-
-        # Create image plane pixel coordinates
-        rays = make_rays(x_span, y_span, self._img_plane_cm, self._resolution)
-
+        self._interp_image.set_image(image)
+        self.img_out = self._interp_image.interpolate_integer(self._img_map)
 
 
 if __name__ == "__main__":
-    scope = Kaleidoscope()
-    img = cv2.imread('test_img.jpg')
-    scope.start_image(img)
+    geom = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=50.0)
+    mirrors = MirrorTube(shape=geom)
+    scope = Kaleidoscope(mirrors)
+
+    scope.view_live(0)

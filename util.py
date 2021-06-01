@@ -143,6 +143,9 @@ class Image(object):
         logging.info("\tInterpolation took %.6f seconds." % (time.time() - t_start))
         return output.reshape([out_shape[0], out_shape[1], 3])
 
+    def set_image(self, image):
+        self._img = image
+
 
 class TextManager(object):
     """

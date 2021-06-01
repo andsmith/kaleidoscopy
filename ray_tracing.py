@@ -35,6 +35,17 @@ class RayBundle(object):
         self._distances = 0 * self._origins[:, :, 0]
 
     @staticmethod
+    def from_resolution_and_fov(resolution, image_plane_z, fov_x_deg=45.0, **kwargs):
+        fov = np.deg2rad(fov_x_deg/2.0)
+        x_half_span = image_plane_z * np.tan(fov)
+        xy_aspect = float(resolution[1]) / resolution[0]
+        y_half_span = x_half_span / xy_aspect
+
+        return RayBundle.from_origin_to_plane([-x_half_span, x_half_span],
+                                              [-y_half_span, y_half_span],
+                                              image_plane_z,resolution, **kwargs)
+
+    @staticmethod
     def from_origin_to_plane(x_span, y_span, z, res, **kwargs):
         """
         initialize a grid from 2-d extent and distance from origin
@@ -184,6 +195,8 @@ class Prism(object):
         :param bottom: z-coordinate, bottom of prism
         :param top:  z-coordinate, top of prism
         """
+        self._bottom = bottom
+        self._top = top
         if not isinstance(corners, np.ndarray):
             corners = np.array(corners)
         self._n = corners.shape[0]
@@ -203,6 +216,9 @@ class Prism(object):
                                             self._top_right[i, :],
                                             self._top_left[i, :]) for i in range(self._n)]
         self._normals = np.array(normals)
+
+    def get_vertical_span(self):
+        return (self._bottom, self._top)
 
     def get_mirrors(self):
         """
@@ -282,6 +298,9 @@ class MirrorTube(object):
         """
         self._facets = shape
         logging.info("Created %i-mirror tube" % (self._facets.get_n(),))
+
+    def get_vertical_span(self):
+        return self._facets.get_vertical_span()
 
     def trace(self, rays, ground_z_cm, max_reflect=10, plot=False):
         """
@@ -463,19 +482,24 @@ def make_stained_glass(image, bounces, thresh=.5):
 
 def test_ray_tracing():
     # shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
-    shape = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=50.0)
+    geom = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=50.0)
     # shape = IsoscelesPrism(10.0, .5, top=2.54, bottom=50.0)
     ray_span = 0.15
     ground_z_cm = 60.0
-    #out_shape = (320, 240)
-    #out_shape = (32, 24)
-    #out_shape = (100,100)
+    # out_shape = (240,320)
+    # out_shape = (100,100)
     out_shape = (1080, 1920)
+    fov_x= 45.
 
     ray_span_v = float(out_shape[1]) / float(out_shape[0]) * ray_span
-    rays = RayBundle.from_origin_to_plane((-ray_span_v/2, ray_span_v/2), (-ray_span/2, ray_span/2), 1.0, out_shape)
+    rays = RayBundle.from_origin_to_plane((-ray_span_v / 2, ray_span_v / 2), (-ray_span / 2, ray_span / 2), 1.0,
+                                          out_shape)
+    import ipdb; ipdb.set_trace()
+    rays = RayBundle.from_resolution_and_fov(resolution=out_shape,
+                                             image_plane_z=4.0,
+                                             fov_x_deg=fov_x)
 
-    mirrors = MirrorTube(shape=shape)
+    mirrors = MirrorTube(shape=geom)
     # load image
     img = Image.from_file('test_img.jpg', flip_bgr_rgb=True, px_per_cm=(150, 150))
 
@@ -498,21 +522,20 @@ def test_ray_tracing():
     span = np.vstack((np.max(img_map.reshape(-1, 2), axis=0),
                       np.min(img_map.reshape(-1, 2), axis=0))).T
 
-    pretty = img.interpolate(img_map,method = 'nearest')
+    pretty = img.interpolate(img_map, method='nearest')
     # pretty = img.interpolate_integer(img_map, bounce)
 
     plt.imshow(pretty)
     plt.axis('equal')
     plt.show()
-    cv2.imwrite("K_out.jpg", pretty[:,:,::-1])
+    cv2.imwrite("K_out.jpg", pretty[:, :, ::-1])
 
     b_img = make_stained_glass(pretty, bounce)
 
     plt.imshow(b_img)
     plt.axis('equal')
-    cv2.imwrite("K_out_stained_glass.jpg", b_img[:,:,::-1])
+    cv2.imwrite("K_out_stained_glass.jpg", b_img[:, :, ::-1])
     plt.show()
-
 
 
 if __name__ == "__main__":
