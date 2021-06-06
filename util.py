@@ -67,6 +67,7 @@ class Image(object):
 
     def update_scale(self, new_scale):
         self._scale = np.array(new_scale)
+
     def plot_3d(self, z_cm, ax=None):
         """
         plot with normal in z-1 direction, +z_cm from origin
@@ -207,8 +208,6 @@ class TextManager(object):
 
     def _check_ages(self):
         valid = [i for i in self._items if i['age'] <= 0 or time.time() - i['start'] < i['age']]
-        if len(valid) < len(self._items):
-            logging.info("Text item(s) aged out.")
         self._items = valid
 
     def render(self, img):
