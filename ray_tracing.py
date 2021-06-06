@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 import logging
 import time
-#import matplotlib.pylab as plt
+import matplotlib.pylab as plt
 import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -33,17 +33,18 @@ class RayBundle(object):
         self._directions = ray_directions
         self._directions /= np.linalg.norm(self._directions, axis=2, keepdims=True)  # unit-ize
         self._distances = 0 * self._origins[:, :, 0]
+        logging.info("Generated RayBundle with %i rays." % (self._active.size,))
 
     @staticmethod
     def from_resolution_and_fov(resolution, image_plane_z, fov_x_deg=45.0, **kwargs):
-        fov = np.deg2rad(fov_x_deg/2.0)
+        fov = np.deg2rad(fov_x_deg / 2.0)
         x_half_span = image_plane_z * np.tan(fov)
         xy_aspect = float(resolution[1]) / resolution[0]
         y_half_span = x_half_span / xy_aspect
 
         return RayBundle.from_origin_to_plane([-x_half_span, x_half_span],
                                               [-y_half_span, y_half_span],
-                                              image_plane_z,resolution, **kwargs)
+                                              image_plane_z, resolution, **kwargs)
 
     @staticmethod
     def from_origin_to_plane(x_span, y_span, z, res, **kwargs):
@@ -220,6 +221,9 @@ class Prism(object):
     def get_vertical_span(self):
         return (self._bottom, self._top)
 
+    def get_corners(self):
+        return self._corners_2d
+
     def get_mirrors(self):
         """
         Get mirrors coords
@@ -286,6 +290,8 @@ class RectangularPrism(Prism):
 
 class MirrorTube(object):
     """
+    Handle simulation of light in mirrors.
+
     Define a ortho-prismatic tube (shape) tube of mirrors, i.e. all perpendicular to flat, facing indwards.
     Input is an arbitrary list of 2-d polygon vertices.  (assumed clockwise, mirrors facing inwards)
     """
@@ -302,17 +308,25 @@ class MirrorTube(object):
     def get_vertical_span(self):
         return self._facets.get_vertical_span()
 
-    def trace(self, rays, ground_z_cm, max_reflect=10, plot=False):
+    def get_corners(self):
+        return self._facets.get_corners()
+
+    def trace(self, rays, ground_z_cm, max_reflect=10, plot=False, record=False):
         """
         Bounce rays through mirror tube, see where they land on other side.
 
         :param rays:  a RayBundle object
         :param ground_z_cm:  when rays exit tube, how far back to ground plane / image?
         :param max_reflect:  how many reflections before ray is considered not hitting ground plane?
-        :return:  tuple(H x W x 3 array of ray destinations on the ground plane, or NAN if not hitting,
-                        H x W array of ray distances traveled, or NAN if not hitting)
-                        H x W array of number of reflections, or -1 if not hitting)
+        :param plot: show in 3d
+        :param record:  Save all reflections & return them, else None
+        :return:  list(H x W x 3 array of ray destinations on the ground plane, or NAN if not hitting,
+                       H x W array of ray distances traveled, or NAN if not hitting)
+                       H x W array of number of reflections, or -1 if not hitting,
+                       list of bounce history (ray intersections, i.e. everwhere the rays hit
+                          (or None if record is False))
         """
+        implement RECORD 
 
         ground_center = np.array([0.0, 0.0, ground_z_cm]).reshape(1, -1)
         ground_normal = np.array([0.0, 0.0, -1.0])  # towards eye
@@ -489,12 +503,13 @@ def test_ray_tracing():
     # out_shape = (240,320)
     # out_shape = (100,100)
     out_shape = (1080, 1920)
-    fov_x= 45.
+    fov_x = 45.
 
     ray_span_v = float(out_shape[1]) / float(out_shape[0]) * ray_span
     rays = RayBundle.from_origin_to_plane((-ray_span_v / 2, ray_span_v / 2), (-ray_span / 2, ray_span / 2), 1.0,
                                           out_shape)
-    import ipdb; ipdb.set_trace()
+    import ipdb;
+    ipdb.set_trace()
     rays = RayBundle.from_resolution_and_fov(resolution=out_shape,
                                              image_plane_z=4.0,
                                              fov_x_deg=fov_x)

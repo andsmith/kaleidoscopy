@@ -1,3 +1,4 @@
+import pylab as plt
 import numpy as np
 import cv2
 import logging
@@ -24,7 +25,7 @@ class Kaleidoscope(object):
                  mirrors,
                  output_resolution=(240, 320),
                  fov_x_deg=45.0,
-                 ground_z_dist_cm=60.0,
+                 ground_z_cm=30.0,
                  image_plane_cm=4.0):
         """
         Geometry already defined
@@ -38,7 +39,7 @@ class Kaleidoscope(object):
         self._input_resolution = None
         self._mirrors = mirrors
 
-        self._ground_z = ground_z_dist_cm + self._mirrors.get_vertical_span()[0]
+        self._ground_z = ground_z_cm
         self._image_plane_z = image_plane_cm
         self._fov_x_deg = fov_x_deg
         self._rays = None
@@ -79,6 +80,64 @@ class Kaleidoscope(object):
                              "abs_coords": None}
         self._colors = {'FPS': (0, 0, 0),
                         'recalculating': (30, 180, 40)}
+
+    def draw_diagram(self):
+
+        def plot_wrap(x,y, *args, **kwargs):
+            y = np.array(y)
+
+            #y = self._ground_z - y
+            plt.plot(x,y,*args, **kwargs)
+
+        # draw eye
+        import pylab as plt
+        plot_wrap(0, 0, '.b', markersize=10)
+
+        # draw scope
+        corners = self._mirrors.get_corners()
+        z = self._mirrors.get_vertical_span()
+
+        for i in range(corners.shape[0]):
+            # plot x,z projection
+            plot_wrap((corners[i, 0], corners[i, 0]), (z[0], z[1]), 'r-', linewidth=2)
+            plot_wrap((corners[i, 0], corners[i, 1]), (z[0], z[0]), 'g-', linewidth=2)
+            plot_wrap((corners[i, 0], corners[i, 1]), (z[1], z[1]), 'b-', linewidth=2)
+            plot_wrap((corners[i, 1], corners[i, 1]), (z[0], z[1]), 'k:', linewidth=2)
+
+        # draw image_plane
+        plot_wrap([-1, 1], [self._image_plane_z, self._image_plane_z], 'k:')
+
+        # draw viewed image
+        plot_wrap([-3, 3], [self._ground_z, self._ground_z], 'k--', linewidth=4)
+
+        # trace rays
+
+        test_rays = RayBundle.from_resolution_and_fov((10, 10), self._ground_z, self._fov_x_deg)
+        origins, directions = test_rays.get_active_rays()
+
+        subset = np.random.permutation(origins.shape[0])[:10]
+        line_starts = []
+        line_stops = []
+
+        for ray in range(directions.shape[0]):
+            line_starts.append([origins[ray, 0], origins[ray, 2]])
+            line_stops.append([directions[ray, 0], directions[ray, 2]])
+
+        line_starts, line_stops = np.vstack(line_starts), np.vstack(line_stops)
+
+        x_coords = np.zeros(3 * line_starts.shape[0])
+        y_coords = x_coords * 0
+        x_coords[::3] = line_starts[:, 0]
+        x_coords[1::3] = line_stops[:, 0]
+        x_coords[2::3] = np.nan
+        y_coords[::3] = line_starts[:, 1]
+        y_coords[1::3] = line_stops[:, 1]
+        y_coords[2::3] = np.nan
+
+        plot_wrap(x_coords, y_coords, 'k-', linewidth=1)
+        plt.gca().invert_yaxis()
+
+        # draw rays
 
     def _set_rays(self):
         self._rays = RayBundle.from_resolution_and_fov(self._output_resolution,
@@ -267,8 +326,11 @@ class Kaleidoscope(object):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    geom = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=50.0)
+    geom = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=22.54)
     mirrors = MirrorTube(shape=geom)
-    scope = Kaleidoscope(mirrors)
+    scope = Kaleidoscope(mirrors, ground_z_cm = 27.0)
+    scope.draw_diagram()
+    plt.axis('equal')
+    plt.show()
     # scope.view_live(0)
-    scope.view_image(cv2.imread('test_img.jpg'))
+    #scope.view_image(cv2.imread('test_img.jpg'))
