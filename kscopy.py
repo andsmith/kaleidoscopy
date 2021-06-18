@@ -83,11 +83,11 @@ class Kaleidoscope(object):
 
     def draw_diagram(self):
 
-        def plot_wrap(x,y, *args, **kwargs):
+        def plot_wrap(x, y, *args, **kwargs):
             y = np.array(y)
 
-            #y = self._ground_z - y
-            plt.plot(x,y,*args, **kwargs)
+            # y = self._ground_z - y
+            plt.plot(x, y, *args, **kwargs)
 
         # draw eye
         import pylab as plt
@@ -112,32 +112,40 @@ class Kaleidoscope(object):
 
         # trace rays
 
-        test_rays = RayBundle.from_resolution_and_fov((10, 10), self._ground_z, self._fov_x_deg)
+        test_rays = RayBundle.from_resolution_and_fov((10, 14), self._ground_z, self._fov_x_deg)
         origins, directions = test_rays.get_active_rays()
 
         subset = np.random.permutation(origins.shape[0])[:10]
-        line_starts = []
-        line_stops = []
 
-        for ray in range(directions.shape[0]):
-            line_starts.append([origins[ray, 0], origins[ray, 2]])
-            line_stops.append([directions[ray, 0], directions[ray, 2]])
+        def _draw_rays(orgs, dirs, *args, **kwargs):
+            line_starts = []
+            line_stops = []
+            for ray in range(dirs.shape[0]):
+                line_starts.append([orgs[ray, 0], orgs[ray, 2]])
+                line_stops.append([dirs[ray, 0], dirs[ray, 2]])
 
-        line_starts, line_stops = np.vstack(line_starts), np.vstack(line_stops)
+            line_starts, line_stops = np.vstack(line_starts), np.vstack(line_stops)
 
-        x_coords = np.zeros(3 * line_starts.shape[0])
-        y_coords = x_coords * 0
-        x_coords[::3] = line_starts[:, 0]
-        x_coords[1::3] = line_stops[:, 0]
-        x_coords[2::3] = np.nan
-        y_coords[::3] = line_starts[:, 1]
-        y_coords[1::3] = line_stops[:, 1]
-        y_coords[2::3] = np.nan
+            x_coords = np.zeros(3 * line_starts.shape[0])
+            y_coords = x_coords * 0
+            x_coords[::3] = line_starts[:, 0]
+            x_coords[1::3] = line_stops[:, 0]
+            x_coords[2::3] = np.nan
+            y_coords[::3] = line_starts[:, 1]
+            y_coords[1::3] = line_stops[:, 1]
+            y_coords[2::3] = np.nan
 
-        plot_wrap(x_coords, y_coords, 'k-', linewidth=1)
-        plt.gca().invert_yaxis()
+            plot_wrap(x_coords, y_coords, *args, **kwargs)
+            plt.gca().invert_yaxis()
+
+        _draw_rays(origins, directions, 'k-', linewidth=1)
 
         # draw rays
+        img_map, distances, bounces, bounce_hist = self._mirrors.trace(test_rays,
+                                                                       self._ground_z,
+                                                                       max_reflect=10,
+                                                                       plot=False,
+                                                                       record=True)
 
     def _set_rays(self):
         self._rays = RayBundle.from_resolution_and_fov(self._output_resolution,
@@ -328,9 +336,9 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     geom = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=22.54)
     mirrors = MirrorTube(shape=geom)
-    scope = Kaleidoscope(mirrors, ground_z_cm = 27.0)
+    scope = Kaleidoscope(mirrors, ground_z_cm=27.0)
     scope.draw_diagram()
     plt.axis('equal')
     plt.show()
     # scope.view_live(0)
-    #scope.view_image(cv2.imread('test_img.jpg'))
+    # scope.view_image(cv2.imread('test_img.jpg'))

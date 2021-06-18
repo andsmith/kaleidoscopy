@@ -166,7 +166,7 @@ class RayBundle(object):
 
 def _get_normals_from_points(c1, c2, c3):
     """
-    Plane normals from three non-colinear points in the plane.
+    Plane normals from three non-collinear points in the plane.
     Oriented so clockwise points away from the clock.
 
     :param c1: (x,y,z) point in plane
@@ -323,10 +323,32 @@ class MirrorTube(object):
         :return:  list(H x W x 3 array of ray destinations on the ground plane, or NAN if not hitting,
                        H x W array of ray distances traveled, or NAN if not hitting)
                        H x W array of number of reflections, or -1 if not hitting,
-                       list of bounce history (ray intersections, i.e. everwhere the rays hit
-                          (or None if record is False))
+                       list of bounce history (ray intersections)
+                           bounce_hist[i][j] = [(x,y,z)_0, (x,y,z)_1, ..., (x,y,z)_ground]
         """
-        implement RECORD 
+        import ipdb; ipdb.set_trace()
+
+        # list of lists, same shape as ray bundle, each list is a rays's history.
+        bounce_record = [[[] for __ in range(rays.get_shape()[1])] for _ in range(rays.get_shape()[0])]
+
+        def accumulate_bounces(bounce_mask, intersections):
+            """
+            Some rays just hit something.  Record this.
+            :param bounce_mask:  N element boolean array, which rays hit?
+            :param intersections: N x 3 (x,y,z) of hit locations
+            """
+            if not record:
+                return
+            locs = np.where(bounce_mask)[0]
+            if len(locs) == 0:
+                return
+            i_inds = (locs / rays.get_shape[1]).astype(np.int64)
+            j_inds = np.mod(locs, rays.get_shape[1])
+            n = 0
+            for i in i_inds:
+                for j in j_inds:
+                    bounce_record[i][j] = intersections[n]
+                    n += 1
 
         ground_center = np.array([0.0, 0.0, ground_z_cm]).reshape(1, -1)
         ground_normal = np.array([0.0, 0.0, -1.0])  # towards eye
@@ -337,6 +359,8 @@ class MirrorTube(object):
 
         # remember these so as to not hit same thing twice (-1 means invalid, n+1 means ground (bounce!))
         last_hits = np.zeros(np.prod(rays.get_shape()), dtype=np.int64) - 1
+
+        # Start rays...
         n = self._facets.get_n()
         rays.set_all_active()
         for iteration in range(max_reflect):
@@ -361,7 +385,7 @@ class MirrorTube(object):
             idx = np.where(turn_off_mask)[0], active_last_hits[turn_off_mask]
             dists[idx] = np.inf
 
-            # Also turn of ray/surface parirs that are oriented incorrectly (nonpositive distance)
+            # Also turn of ray/surface paris that are oriented incorrectly (non-positive distance)
             with np.errstate(divide='ignore', invalid='ignore'):  # some may now be inf
                 diverging = np.logical_or(dists < 0, np.isinf(dists))
             dists[diverging] = np.inf
@@ -385,24 +409,22 @@ class MirrorTube(object):
             logging.info("\tGround has %s rays hitting it first." % (np.sum(ground_hits),))
             intersects = ground_dists[ground_hits] * ray_dirs[ground_hits, :] + ray_starts[ground_hits, :]
             idx = _double_index(active, ground_hits)
+            accumulate_bounces(idx, intersects)
             out_points[idx] = intersects
             out_dists[idx] = ground_dists[ground_hits].reshape(-1)
             out_reflects[idx] = iteration
             last_hits[idx.reshape(-1)] = n
 
-            # Hit a mirror?  Reflect.
-
+            # for live plots
             palette = cm.get_cmap('brg')
             color_indices = np.linspace(0, 1.0, n + 1)
             colors = [palette(i) for i in color_indices]
-
             if plot:
                 ax = self._facets.plot_3d()
 
+            # See which rays hit which mirror first
             _, m_normals = self._facets.get_mirrors()
-
-            # NEED TO FIX SO HITS MIRRORS FIRST, NEEDS TO MOVE ON TO GROUND IF GOING UNDER!
-            for mirror_i in range(n):
+            for mirror_i in range(n):  # ## FIX:  Add bounds check to mirrors!
                 mirror_hits = hits == mirror_i
                 idx = _double_index(active, mirror_hits)
                 last_hits[idx.reshape(-1)] = mirror_i  # don't hit again next time!
