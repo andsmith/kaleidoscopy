@@ -108,14 +108,12 @@ class Kaleidoscope(object):
         plot_wrap([-1, 1], [self._image_plane_z, self._image_plane_z], 'k:')
 
         # draw viewed image
-        plot_wrap([-3, 3], [self._ground_z, self._ground_z], 'k--', linewidth=4)
+        plot_wrap([-3, 3], [self._ground_z, self._ground_z], 'k-', linewidth=4)
 
         # trace rays
-
-        test_rays = RayBundle.from_resolution_and_fov((10, 14), self._ground_z, self._fov_x_deg)
+        shape = (10, 14)
+        test_rays = RayBundle.from_resolution_and_fov(shape, self._ground_z, self._fov_x_deg)
         origins, directions = test_rays.get_active_rays()
-
-        subset = np.random.permutation(origins.shape[0])[:10]
 
         def _draw_rays(orgs, dirs, *args, **kwargs):
             line_starts = []
@@ -146,6 +144,19 @@ class Kaleidoscope(object):
                                                                        max_reflect=10,
                                                                        plot=False,
                                                                        record=True)
+        line_x = []
+        line_y = []
+        import ipdb; ipdb.set_trace()
+        positions = origins.reshape([shape[0], shape[1],3])
+        for i in range(len(bounce_hist)):
+            for j in range(len(bounce_hist[i])):
+                for bounce in bounce_hist[i][j]:
+                    line_x.extend([positions[i][j][0], bounce[0], np.nan ])
+                    line_y.extend([positions[i][j][2], bounce[2], np.nan ])
+                    positions[i][j] = bounce
+        plt.plot(line_x, line_y, 'k-')
+
+
 
     def _set_rays(self):
         self._rays = RayBundle.from_resolution_and_fov(self._output_resolution,
@@ -334,9 +345,9 @@ class Kaleidoscope(object):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    geom = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=22.54)
+    geom = NGonPrism(n=3, r=1.012341234, top=1.54, bottom=12.54)
     mirrors = MirrorTube(shape=geom)
-    scope = Kaleidoscope(mirrors, ground_z_cm=27.0)
+    scope = Kaleidoscope(mirrors, ground_z_cm=17.0, image_plane_cm=1.02)
     scope.draw_diagram()
     plt.axis('equal')
     plt.show()

@@ -326,7 +326,6 @@ class MirrorTube(object):
                        list of bounce history (ray intersections)
                            bounce_hist[i][j] = [(x,y,z)_0, (x,y,z)_1, ..., (x,y,z)_ground]
         """
-        import ipdb; ipdb.set_trace()
 
         # list of lists, same shape as ray bundle, each list is a rays's history.
         bounce_record = [[[] for __ in range(rays.get_shape()[1])] for _ in range(rays.get_shape()[0])]
@@ -335,20 +334,21 @@ class MirrorTube(object):
             """
             Some rays just hit something.  Record this.
             :param bounce_mask:  N element boolean array, which rays hit?
-            :param intersections: N x 3 (x,y,z) of hit locations
+            :param intersections: np.sum(bounce_mask) x 3 (x,y,z) of hit locations
             """
+
+            bounce_mask = bounce_mask.reshape(-1)
             if not record:
                 return
             locs = np.where(bounce_mask)[0]
             if len(locs) == 0:
                 return
-            i_inds = (locs / rays.get_shape[1]).astype(np.int64)
-            j_inds = np.mod(locs, rays.get_shape[1])
-            n = 0
-            for i in i_inds:
-                for j in j_inds:
-                    bounce_record[i][j] = intersections[n]
-                    n += 1
+
+            i_inds = (locs / rays.get_shape()[1]).astype(np.int64)
+            j_inds = np.mod(locs, rays.get_shape()[1])
+            for n in range(len(locs)):
+                bounce_record[i_inds[n]][j_inds[n]].append(intersections[n])
+                n += 1
 
         ground_center = np.array([0.0, 0.0, ground_z_cm]).reshape(1, -1)
         ground_normal = np.array([0.0, 0.0, -1.0])  # towards eye
@@ -434,6 +434,8 @@ class MirrorTube(object):
                     mirror_intersects = dists[:, mirror_i][mirror_hits].reshape(-1, 1) * ray_dirs[mirror_hits] + \
                                         ray_starts[mirror_hits]
 
+                    accumulate_bounces(mirror_hits, mirror_intersects)
+
                 if plot:
                     rays.plot_3d(dists[:, mirror_i][mirror_hits], mirror_hits, ax=ax)
                 rays.reflect(mirror_hits, mirror_intersects, m_normals[mirror_i, :])
@@ -449,7 +451,8 @@ class MirrorTube(object):
 
         return out_points.reshape(list(rays.get_shape()) + [3]), \
                out_dists.reshape(rays.get_shape()), \
-               out_reflects.reshape(rays.get_shape()),
+               out_reflects.reshape(rays.get_shape()), \
+               bounce_record
 
     def get_image_map(self, plot_map=False, **kwargs):
         coords, dists, bounces = self.trace(**kwargs)
@@ -530,8 +533,7 @@ def test_ray_tracing():
     ray_span_v = float(out_shape[1]) / float(out_shape[0]) * ray_span
     rays = RayBundle.from_origin_to_plane((-ray_span_v / 2, ray_span_v / 2), (-ray_span / 2, ray_span / 2), 1.0,
                                           out_shape)
-    import ipdb;
-    ipdb.set_trace()
+
     rays = RayBundle.from_resolution_and_fov(resolution=out_shape,
                                              image_plane_z=4.0,
                                              fov_x_deg=fov_x)
