@@ -118,7 +118,7 @@ class Kaleidoscope(object):
             eye_h = [ax.scatter(0.0, 0.0, 0.0, color='b')]
 
         # trace rays, just one row to see how it bounces
-        shape = (5, 5)
+        shape = (5,5)
         test_rays = RayBundle.from_resolution_and_fov(shape, self._ground_z, self._fov_x_deg)
         origins, directions = test_rays.get_active_rays()
         origins = origins.copy()
@@ -141,23 +141,19 @@ class Kaleidoscope(object):
                                                    scope_top_z_cm=self._top_z,
                                                    max_reflect=10,
                                                    record=True)
-
-
         if flat:
+            handles = [eye_h[0], scope_h[0], rays_h[0]]
+            labels = ["eye", "mirrors", "ray image-plane \nintersections"]
+            plt.legend(handles, labels)
             plt.axis('equal')
         else:
-            rays_h = [test_rays.plot_bounce_history(bounce_hist, ax=plt.gca(),flat=False, linewidth=.5)]
-
+            rays_h = [test_rays.plot_bounce_history(bounce_hist, ax=plt.gca(), flat=False, linewidth=.5)]
             # set bounding box
             ax.set_zlim(0, self._ground_z)
             z_lim = np.array((0, self._ground_z))
             x_lim = z_lim - np.mean(z_lim)
             y_lim = z_lim - np.mean(z_lim)
             ax.scatter(x_lim, y_lim, z_lim, color=(0, 1, 1), alpha=0.0)
-        # add legend
-        handles = [eye_h[0], scope_h[0], rays_h[0]]
-        labels = ["eye", "mirrors", "ray image-plane \nintersections"]
-        plt.legend(handles, labels)
         plt.title("Kaleidoscope diagram (scale cm)")
 
         return ax
@@ -235,6 +231,7 @@ class Kaleidoscope(object):
         labels = ["eye", "mirrors", "image plane", "image/camera", "rays"]
         plt.legend(handles, labels)
         plt.title("Kaleidoscope diagram (scale cm)")
+        plt.axis('equal')
 
     def _set_rays(self):
         self._rays = RayBundle.from_resolution_and_fov(self._output_resolution,
@@ -421,25 +418,20 @@ class Kaleidoscope(object):
         return
 
 
-def _test_kscope_diagram():
+def _test_kscope_diagrams():
     geom = NGonPrism(n=4, r=np.sqrt(2.0), height=11.323, phi=np.pi / 4.)
     mirrors = MirrorTube(prism=geom)
-    scope = Kaleidoscope(mirrors, ground_z_cm=20.0, scope_top_z_cm=3.0)
-    scope.draw_diagram()
-    plt.axis('equal')
-    plt.show()
-
-
-def _test_kscope_rays_3d():
-    geom = IsoscelesPrism(theta_deg=35.0, h_cm=3.0, height=11.0)
-    mirrors = MirrorTube(prism=geom)
-    scope = Kaleidoscope(mirrors, ground_z_cm=20.0, scope_top_z_cm=3.0)
+    scope = Kaleidoscope(mirrors, ground_z_cm=20.0, scope_top_z_cm=2.0)
     scope.draw_top_diagram(flat=False)
+    plt.show()
+    scope.draw_diagram()
+    plt.show()
+    scope.draw_top_diagram(flat=True)
     plt.show()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    _test_kscope_rays_3d()
+    #_test_kscope_diagrams()
     # scope.view_live(0)
     # scope.view_image(cv2.imread('test_img.jpg'))

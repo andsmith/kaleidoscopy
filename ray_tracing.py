@@ -168,7 +168,7 @@ class RayBundle(object):
     def get_shape(self):
         return self._directions.shape[:2]
 
-    def plot_bounce_history(self, bounce_hist,ax=None,flat=True, **kwargs):
+    def plot_bounce_history(self, bounce_hist, ax=None, flat=True, **kwargs):
         if ax is None:
             fig = plt.figure()
             ax = fig.gca() if flat else fig.gca(projection='3d')
@@ -176,22 +176,36 @@ class RayBundle(object):
         line_x = []
         line_y = []
         line_z = []
+
+        line_x0 = []
+        line_y0 = []
+        line_z0 = []
+
         shape = self._directions.shape[:2]
         positions = self._origins.reshape([shape[0], shape[1], 3]) * 0
 
         for ray_i in range(len(bounce_hist)):
             for ray_j in range(len(bounce_hist[ray_i])):
-                for bounce in bounce_hist[ray_i][ray_j]:
+                for b_i, bounce in enumerate(bounce_hist[ray_i][ray_j]):
                     x = [positions[ray_i][ray_j][0], bounce[0]]
                     y = [positions[ray_i][ray_j][1], bounce[1]]
                     z = [positions[ray_i][ray_j][2], bounce[2]]
-                    line_x.extend(x + [np.nan])
-                    line_y.extend(y + [np.nan])
-                    line_z.extend(z + [np.nan])
+                    if b_i > 0:
+                        line_x.extend(x + [np.nan])
+                        line_y.extend(y + [np.nan])
+                        line_z.extend(z + [np.nan])
+                    else:
+                        line_x0.extend(x + [np.nan])
+                        line_y0.extend(y + [np.nan])
+                        line_z0.extend(z + [np.nan])
+
                     positions[ray_i][ray_j] = bounce
         if flat:
-            handle = plt.plot(line_x, line_z, 'k-', **kwargs)
+            x_coords = line_x0 + line_x
+            y_coords = line_z0 + line_z
+            handle = plt.plot(x_coords, y_coords, 'k-', **kwargs)
         else:
+            plt.plot(line_x0, line_y0, line_z0, 'k-', alpha=.5,**kwargs)
             handle = plt.plot(line_x, line_y, line_z, 'k-', **kwargs)
         return handle
 
@@ -277,16 +291,13 @@ class Prism(object):
             ax = fig.add_subplot(111, projection='3d')
 
         offset_vector = np.array([0, 0, z_offset])
-        print(offset_vector)
+
         top_right = self._top_right + offset_vector
         top_left = self._top_left + offset_vector
 
         bottom_right = self._bottom_right + offset_vector
         bottom_left = self._bottom_left + offset_vector
         all_corners = np.hstack([top_right, top_left, bottom_left, bottom_right])
-        print(all_corners.shape)
-        import ipdb;
-        ipdb.set_trace()
 
         handles = plot_3d_polygon(all_corners, ax, color=color, **kwargs)
         return handles, ax
@@ -472,36 +483,35 @@ class MirrorTube(object):
             m_hits = np.argmin(mirror_dists, axis=1)  # ray is shortest distance from which mirror?
             closest_dists = mirror_dists[(np.arange(n_active), m_hits)]
 
-            # Hit the ground?  Save.
-            if iteration == 0:  # check for rays going over top
-
-                over_top = np.logical_and(mirror_intersects[:, 2, :] < scope_top_z_cm,
-                                          0.0 < mirror_intersects[:, 2, :])
-                invalid_m_dists[over_top] = True  # mark as invalid
-                missed_all_mirrors = np.bitwise_and.reduce(over_top, axis=1)
-                logging.info("\tFirst iteration has %i rays missing all mirrors, outside prism (%% %.3f)." % (
-                    int(np.sum(missed_all_mirrors)), np.mean(missed_all_mirrors) * 100.))
-
+            # Hit the ground?  record location & deactivate
             ground_hits = closest_dists > ground_dists.reshape(-1)
             logging.info("\tGround has %s rays hitting it first." % (np.sum(ground_hits),))
             if np.sum(ground_hits) != np.sum(no_mirror):
                 logging.warning(
                     "The number of rays not hitting a mirror is different from the number hitting the ground.")
+            # check for rays going over top
+            if iteration == 0:
+                over_top = np.logical_and(mirror_intersects[:, 2, :] < scope_top_z_cm,
+                                          0.0 < mirror_intersects[:, 2, :])
+                invalid_m_dists[over_top] = True  # mark as invalid
+                missed_all_mirrors = np.bitwise_or.reduce(over_top, axis=1)  # Breaks nonconvex prisms!
+                logging.info("\tFirst iteration has %i rays missing all mirrors, outside prism (%% %.3f)." % (
+                    int(np.sum(missed_all_mirrors)), np.mean(missed_all_mirrors) * 100.))
+                ground_hits = np.logical_or(ground_hits, missed_all_mirrors)
+
             idx = _double_index(active, ground_hits)
             accumulate_bounces(idx, ground_intersects[ground_hits, :])
             out_points[idx] = ground_intersects[ground_hits, :]
             out_dists[idx] = ground_dists[ground_hits].reshape(-1)
-
             out_reflects[idx] = iteration
             last_hits[idx.reshape(-1)] = n
-
-            # for live plots
 
             # See which rays hit which mirror first
 
             for mirror_i in range(n):
-                mirror_hits = (m_hits == mirror_i) & np.logical_not(np.isinf(closest_dists))
-                print(mirror_hits.shape, m_hits.shape, mirror_i)
+                mirror_hits = (m_hits == mirror_i) & np.logical_not(np.isinf(closest_dists)) & np.logical_not(
+                    ground_hits)
+
                 idx = _double_index(active, mirror_hits)
                 last_hits[idx.reshape(-1)] = mirror_i  # don't hit again next time!
                 logging.info(
