@@ -21,32 +21,36 @@ class KScopeState(Enum):
 
 class Kaleidoscope(object):
     """
-    Handle  video.
+    Main app & scope object.  (FIX:  separate these)
     """
 
     def __init__(self,
                  mirrors,
                  output_resolution=(240, 320),
-                 fov_x_deg=45.0,
-                 scope_top_z_cm=4.0,
-                 ground_z_cm=30.0):
+                 fov_deg=45.0,
+                 ground_z_cm=20.0):
         """
-        Geometry already defined
+        Eye is at (0, 0, 0), looking in the Z+ direction.
+        The Image plane is at the eyepiece (top of kaleidoscope).
+        The output pixels tile the image plane such that the eyepiece is just entirely enclosed.
+        
+        Geometry already defined by mirrors.
         :param mirrors:  MirrorTube object
         :param output_resolution:  (h, w) pixels
-        :param fov_x_deg:  field of view for the h pixels
-        :param scope_top_z_cm: where top of scope (image plane) is WRT eye
+        :param fov:  field of view for the narrower dimension
         :param ground_z_cm:  added to bottom of kaleidoscope before image/video.
         """  # params
         theta_deg = 15.0
         self._output_resolution = output_resolution
         self._input_resolution = None
         self._mirrors = mirrors
-        self._top_z = scope_top_z_cm
-
+        r = mirrors.get_view_rad()
+        self._top_z = r / np.tan(np.deg2rad(fov_deg) / 2.0)
+        logging.info("Scope initialized with eye at %.2f cm, and viewport of diameter %.2f cm." % (
+            self._top_z, r * 2.0))
         self._ground_z = ground_z_cm
         self._image_plane_z = self._top_z  # image plane at top of `scope
-        self._fov_x_deg = fov_x_deg
+        self._fov_deg = fov_deg
         self._rays = None
         self._img_map, self._dists, self._bounce = None, None, None
         self._img_map_old = False
@@ -118,8 +122,8 @@ class Kaleidoscope(object):
             eye_h = [ax.scatter(0.0, 0.0, 0.0, color='b')]
 
         # trace rays, just one row to see how it bounces
-        shape = (5,5)
-        test_rays = RayBundle.from_resolution_and_fov(shape, self._ground_z, self._fov_x_deg)
+        shape = (11, 11)
+        test_rays = RayBundle.from_resolution_and_fov(shape, self._ground_z, self._fov_deg)
         origins, directions = test_rays.get_active_rays()
         origins = origins.copy()
         directions = directions.copy()
@@ -171,19 +175,20 @@ class Kaleidoscope(object):
 
         # draw scope
         corners = self._mirrors.get_corners()
-        z = self._top_z, self._top_z + self._mirrors.get_height()
+        z_span = self._top_z, self._top_z + self._mirrors.get_height()
         scope_h = None
         for i in range(corners.shape[0]):
             # plot x,z projection
-            scope_h = plot_wrap((corners[i, 0], corners[i, 0]), (z[0], z[1]), 'r-', linewidth=2)
+            scope_h = plot_wrap((corners[i, 0], corners[i, 0]), (z_span[0], z_span[1]), 'r-', linewidth=2)
 
         # draw image_plane
         image_h = plot_wrap([-1, 1], [self._image_plane_z, self._image_plane_z], 'k:')
 
         # trace rays, just one row to see how it bounces
-        shape = (1, 35)
+        shape = (1, 135)
 
-        test_rays = RayBundle.from_resolution_and_fov(shape, self._ground_z, self._fov_x_deg)
+        test_rays = RayBundle.from_resolution_and_fov(shape, image_plane_z=self._top_z, fov_deg=self._fov_deg,
+                                                      square=True)
         origins, directions = test_rays.get_active_rays()
         origins = origins.copy()
         directions = directions.copy()
@@ -212,19 +217,22 @@ class Kaleidoscope(object):
         # _draw_rays(origins, directions, 'k-', linewidth=1)
         # draw rays
 
-        _, _, _, bounce_hist = self._mirrors.trace(test_rays,
-                                                   ground_z_cm=self._ground_z,
-                                                   scope_top_z_cm=self._top_z,
-                                                   max_reflect=10,
-                                                   record=True)
-        rays_h = test_rays.plot_bounce_history(bounce_hist,ax=plt.gca(), linewidth=.5)
-        x_coord_lists = [np.array(bounce_hist[0][i])[:, 0].tolist() for i in range(len(bounce_hist[0]))]
-        x_coords = [[xc for x_coord_list in x_coord_lists for xc in x_coord_list]]
-        target_extent = np.array([np.min(x_coords), np.max(x_coords)])
-        target_margin = 0.07 * (target_extent[1] - target_extent[0])
-        target_extent[0] -= target_margin
-        target_extent[1] += target_margin
+        _, _, distances, bounce_hist = self._mirrors.trace(test_rays,
+                                                          ground_z_cm=self._ground_z,
+                                                          scope_top_z_cm=self._top_z,
+                                                          max_reflect=10,
+                                                          record=True)
+
+        rays_h = test_rays.plot_bounce_history(bounce_hist, ax=plt.gca(), linewidth=.5)
+        # x_coord_lists = [np.array(bounce_hist[0][i])[:, 0].tolist() for i in range(len(bounce_hist[0]))]
+        # x_coords = [[xc for x_coord_list in x_coord_lists for xc in x_coord_list]]
+
+        # target_extent = np.array([np.min(x_coords), np.max(x_coords)])
+        # target_margin = 0.07 * (target_extent[1] - target_extent[0])
+        # target_extent[0] -= target_margin
+        # target_extent[1] += target_margin
         # draw viewed image
+        target_extent = [-1., 1.0]
         target_h = plot_wrap(target_extent, [self._ground_z, self._ground_z], 'k-', linewidth=4)
 
         handles = [eye_h[0], scope_h[0], image_h[0], target_h[0], rays_h[0]]
@@ -232,11 +240,14 @@ class Kaleidoscope(object):
         plt.legend(handles, labels)
         plt.title("Kaleidoscope diagram (scale cm)")
         plt.axis('equal')
+        plt.show()
+        plt.plot(distances.reshape(-1))
+        plt.show()
 
     def _set_rays(self):
         self._rays = RayBundle.from_resolution_and_fov(self._output_resolution,
                                                        self._image_plane_z,
-                                                       fov_x_deg=self._fov_x_deg)
+                                                       fov_deg=self._fov_deg)
 
     def _set_image_map(self):
         self._img_map, self._dists, self._bounce = self._mirrors.get_image_map(rays=self._rays,
@@ -421,17 +432,17 @@ class Kaleidoscope(object):
 def _test_kscope_diagrams():
     geom = NGonPrism(n=4, r=np.sqrt(2.0), height=11.323, phi=np.pi / 4.)
     mirrors = MirrorTube(prism=geom)
-    scope = Kaleidoscope(mirrors, ground_z_cm=20.0, scope_top_z_cm=2.0)
-    scope.draw_top_diagram(flat=False)
-    plt.show()
+    scope = Kaleidoscope(mirrors, ground_z_cm=20.0, fov_deg=60.0)
+    # scope.draw_top_diagram(flat=False)
+    # plt.show()
     scope.draw_diagram()
     plt.show()
-    scope.draw_top_diagram(flat=True)
-    plt.show()
+    # scope.draw_top_diagram(flat=True)
+    # plt.show()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    #_test_kscope_diagrams()
+    _test_kscope_diagrams()
     # scope.view_live(0)
     # scope.view_image(cv2.imread('test_img.jpg'))

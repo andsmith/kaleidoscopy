@@ -7,6 +7,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from util import make_bounds, pct_str, Image
 from skimage.morphology import skeletonize
+from scipy.optimize import minimize
 
 
 class RayBundle(object):
@@ -36,11 +37,28 @@ class RayBundle(object):
         self._history = []
 
     @staticmethod
-    def from_resolution_and_fov(resolution, image_plane_z, fov_x_deg=45.0, **kwargs):
-        fov = np.deg2rad(fov_x_deg / 2.0)
-        x_half_span = image_plane_z * np.tan(fov)
+    def from_resolution_and_fov(resolution, image_plane_z, fov_deg=45.0, square=False, **kwargs):
+        """
+        Initialize from desired components...
+        :param resolution: (h, w)
+        :param image_plane_z:  how far from origin
+        :param fov:  how wide is view angle of NARROWER of two dimensions
+        :param kwargs: other params for RayBundle.__init__()
+        :return:
+        """
+
+        fov = np.deg2rad(fov_deg / 2.0)
+        half_span = image_plane_z * np.tan(fov)
         xy_aspect = float(resolution[1]) / resolution[0]
-        y_half_span = x_half_span / xy_aspect
+        if square:
+            x_half_span = half_span
+            y_half_span = half_span
+        elif (xy_aspect < 1.0):
+            x_half_span = half_span
+            y_half_span = x_half_span / xy_aspect
+        else:
+            y_half_span = half_span
+            x_half_span = y_half_span * xy_aspect
 
         return RayBundle.from_origin_to_plane([-x_half_span, x_half_span],
                                               [-y_half_span, y_half_span],
@@ -205,7 +223,7 @@ class RayBundle(object):
             y_coords = line_z0 + line_z
             handle = plt.plot(x_coords, y_coords, 'k-', **kwargs)
         else:
-            plt.plot(line_x0, line_y0, line_z0, 'k-', alpha=.5,**kwargs)
+            plt.plot(line_x0, line_y0, line_z0, 'k-', alpha=.5, **kwargs)
             handle = plt.plot(line_x, line_y, line_z, 'k-', **kwargs)
         return handle
 
@@ -229,18 +247,57 @@ def _get_normals_from_points(c1, c2, c3):
     return normals
 
 
+def max_inscribed_circle(corners):
+    """
+    Approximate max (x, y, r) such that all points inside circle are within polygon.
+    Not valid for convex polygons (?)
+    Algorithm:
+        Sample points on polygon (N per side)
+        Optimize over x,y to maximize the minimum distance distance to sample points
+    :param corners: N x 2, list of x, y, corners, counterclockwise
+    :return: (x,y), r of max inscribed circle
+    """
+    n_sample_points_per_line = 50
+    samples = []
+    interp = np.linspace(0.0, 1.0, n_sample_points_per_line).reshape(1, 1, -1)
+    corners_shifted = np.expand_dims(np.vstack([corners[1:, :], corners[0, :]]), 2)
+
+    for i in range(corners.shape[0]):
+        corner_samples = interp * np.expand_dims(corners, 2) + (1.0 - interp) * corners_shifted
+        samples.extend([corner_samples[:, :, i] for i in range(n_sample_points_per_line)])
+    samples = np.vstack(samples)
+
+    def error_fn(xy):
+        margin = 0.001
+        dists = np.linalg.norm(samples - xy.reshape(1, -1), axis=1)
+        err = -np.min(dists)
+        return err +margin
+
+    bbox = np.vstack([np.min(corners, axis=0),
+                      np.max(corners, axis=0)])
+    bbox = [bbox[:, 0].tolist(), bbox[:, 1].tolist()]
+    x_init = np.array([0.01, 0.011])
+    # solution = minimize(error_fn, x_init, method='Nelder-Mead')
+    solution = minimize(error_fn, x_init, method='Powell', bounds=bbox)
+    pos = solution.x
+    r = -error_fn(pos)
+    return pos, r
+
+
 class Prism(object):
     """
     Class to handle geometry of a right prism.
     """
 
-    def __init__(self, corners, height, center=True):
+    def __init__(self, corners, height, inscribed_radius=None):
         """
-        Init with list of 2d coordinates (i.e. closed polygon loop), representing view from the top.
+        NOTE:  Corners are shifted so inscribed circle center has x,y=0,0, if inscribed_radius is None.
 
+        Init with list of 2d coordinates (i.e. closed polygon loop), representing view from the top.
         :param corners:  Nx2 array, or N-element list of (x, y) pairs, clockwise oriened corners of a N-sided polygon.
         :param height: height of prism sides
-        :param center:  make avg vertex (0,0)
+        :param inscribed_circle:  ((x, y), r):  must fit inside corners, (not checked),
+            calculated if None, breaks for nonconvex
 
         """
         self._height = height
@@ -250,18 +307,17 @@ class Prism(object):
             corners = np.array(corners)
         self._n = corners.shape[0]
 
-        if center:
-            span = np.vstack([np.min(corners, axis=0),
-                              np.max(corners, axis=0)])
-            center_xy = np.mean(span, axis=0, keepdims=True)
-            corners = corners - center_xy
+        if inscribed_radius is None:
+            center, inscribed_radius = max_inscribed_circle(corners)
+            corners -= np.array(center).reshape(1,2)
+        self._rad = inscribed_radius
 
         self._top_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * top))
         self._bottom_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * bottom))
-        # shift & wrap
+
+        # cycle & wrap
         self._top_right = np.hstack((np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * top))
-        self._bottom_right = np.hstack(
-            (np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * bottom))
+        self._bottom_right = np.hstack((np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * bottom))
         self._corners_2d = np.hstack((self._top_left[:, :2], self._top_right[:, :2]))
 
         self._z_centers = (bottom + top) / 2.0
@@ -274,6 +330,9 @@ class Prism(object):
 
     def get_height(self):
         return self._height
+
+    def get_inscribed_rad(self):
+        return self._rad
 
     def get_corners(self):
         return self._corners_2d
@@ -377,6 +436,9 @@ class MirrorTube(object):
 
     def plot_3d(self, *args, z_offset=0.0, **kwargs):
         return self._facets.plot_3d(*args, z_offset=z_offset, **kwargs)
+
+    def get_view_rad(self):
+        return self._facets.get_inscribed_rad()
 
     def trace(self, rays, ground_z_cm, scope_top_z_cm, max_reflect=10, record=False):
         """
@@ -530,7 +592,7 @@ class MirrorTube(object):
                bounce_record
 
     def get_image_map(self, plot_map=False, **kwargs):
-        coords, dists, bounce___hist, bounces = self.trace(**kwargs)
+        coords, dists, reflects, bounces = self.trace(**kwargs)
         if plot_map:
             fig, ax = plt.subplots(nrows=1, ncols=2, sharex='all', sharey='all')
             ax[0].imshow(dists)
@@ -539,7 +601,7 @@ class MirrorTube(object):
                 np.min(dists), np.max(dists), np.min(bounces), np.max(bounces)))
             plt.show()
 
-        return coords[:, :, :2], dists, bounces
+        return coords[:, :, :2], dists, reflects, bounces
 
 
 def _double_index(mask, sub_mask):
@@ -597,60 +659,41 @@ def make_stained_glass(image, bounces, thresh=.5):
 
 
 def test_ray_tracing():
-    # shape = RectangularPrism(w_cm=2.01, h_cm=2.01, top=2.54, bottom=50.0)
-    geom = NGonPrism(n=3, r=1.012341234, top=2.54, bottom=50.0)
-    # shape = IsoscelesPrism(10.0, .5, top=2.54, bottom=50.0)
-    ray_span = 0.15
-    ground_z_cm = 60.0
-    # out_shape = (240,320)
-    # out_shape = (100,100)
-    out_shape = (1080, 1920)
-    fov_x = 45.
-
-    ray_span_v = float(out_shape[1]) / float(out_shape[0]) * ray_span
-    rays = RayBundle.from_origin_to_plane((-ray_span_v / 2, ray_span_v / 2), (-ray_span / 2, ray_span / 2), 1.0,
-                                          out_shape)
+    geom = NGonPrism(n=4, r=np.sqrt(2.0), height=11.323, phi=np.pi / 4.)
+    mirrors = MirrorTube(prism=geom, )
+    out_shape = (240,320)
+    fov_deg = 45.
+    ground_z_cm =20.0
+    r = mirrors.get_view_rad()
+    top_z = r / np.tan(np.deg2rad(fov_deg) / 2.0)
+    print("Test init with mirrors r=%.5f, top_z=%.5f" % (r, top_z))
 
     rays = RayBundle.from_resolution_and_fov(resolution=out_shape,
-                                             image_plane_z=4.0,
-                                             fov_x_deg=fov_x)
+                                             image_plane_z=top_z,
+                                             fov_deg=fov_deg)
 
-    mirrors = MirrorTube(shape=geom)
+    mirrors = MirrorTube(prism=geom)
+
     # load image
-    img = Image.from_file('test_img.jpg', flip_bgr_rgb=True, px_per_cm=(150, 150))
-
-    if False:
-        # plot mirrors?
-        ax = shape.plot_3d()
-
-        # plot initial rays?
-        rays.plot_3d(ax=ax, distances=30.)
-
-        # plot image
-        img.plot_3d(ax=ax, z_cm=ground_z_cm)
-
-        plt.show()
+    img = Image.from_file('test_img.jpg', flip_bgr_rgb=True, px_per_cm=(50, 50))
 
     # ray-trace
-    img_map, dists, bounce = mirrors.get_image_map(rays=rays, max_reflect=30,
-                                                   ground_z_cm=ground_z_cm, plot=False)
+    img_map, dists, n_bounces,bounce_hist = mirrors.get_image_map(rays=rays,
+                                                   ground_z_cm=ground_z_cm,
+                                                   scope_top_z_cm =top_z,
+                                                   max_reflect=100,
+                                                   record=True)
 
-    span = np.vstack((np.max(img_map.reshape(-1, 2), axis=0),
-                      np.min(img_map.reshape(-1, 2), axis=0))).T
+    plt.imshow(dists)
+    plt.colorbar()
+    plt.axis('equal')
+    plt.show()
 
-    pretty = img.interpolate(img_map, method='nearest')
-    # pretty = img.interpolate_integer(img_map, bounce)
+    # pretty = img.interpolate(img_map, method='nearest')
+    pretty = img.interpolate_integer(img_map)
 
     plt.imshow(pretty)
     plt.axis('equal')
-    plt.show()
-    cv2.imwrite("K_out.jpg", pretty[:, :, ::-1])
-
-    b_img = make_stained_glass(pretty, bounce)
-
-    plt.imshow(b_img)
-    plt.axis('equal')
-    cv2.imwrite("K_out_stained_glass.jpg", b_img[:, :, ::-1])
     plt.show()
 
 
