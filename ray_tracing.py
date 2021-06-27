@@ -171,17 +171,22 @@ class RayBundle(object):
         self._active[_double_index(self._active, inactive)] = False
 
     def reflect(self, subset, intersections, plane_normal):
+        idx = _double_index(self._active, subset)
+        # new origin is just intersection point
+        new_origins = intersections.reshape(-1, 3)
 
-        self._origins[_double_index(self._active, subset)] = intersections.reshape(-1, 3)
-
+        # new direction has component parallel to normal reversed
         dirs = self._directions[self._active][subset]
-
         delta = - 2.0 * np.dot(dirs, plane_normal).reshape(-1, 1) * plane_normal.reshape(1, 3)
-
         new_directions = self._directions[self._active][subset] + delta
         new_directions /= np.linalg.norm(new_directions, axis=1, keepdims=True)
 
-        self._directions[_double_index(self._active, subset)] = new_directions
+        # get distance traveled for this update
+        distances = np.linalg.norm(self._origins[idx] - new_origins, axis=1)
+
+        self._origins[idx] = new_origins
+        self._directions[idx] = new_directions
+        return distances
 
     def get_shape(self):
         return self._directions.shape[:2]
@@ -564,7 +569,7 @@ class MirrorTube(object):
             idx = _double_index(active, ground_hits)
             accumulate_bounces(idx, ground_intersects[ground_hits, :])
             out_points[idx] = ground_intersects[ground_hits, :]
-            out_dists[idx] = ground_dists[ground_hits].reshape(-1)
+            out_dists[idx] += ground_dists[ground_hits].reshape(-1)
             out_reflects[idx] = iteration
             last_hits[idx.reshape(-1)] = n
 
@@ -581,7 +586,8 @@ class MirrorTube(object):
 
                 accumulate_bounces(idx, mirror_intersects[mirror_hits, :, mirror_i])
 
-                rays.reflect(mirror_hits, mirror_intersects[mirror_hits, :, mirror_i], m_normals[mirror_i, :])
+                distances = rays.reflect(mirror_hits, mirror_intersects[mirror_hits, :, mirror_i], m_normals[mirror_i, :])
+                out_dists[idx] += distances
 
             to_deactivate = np.logical_or(ground_hits, no_mirror)
             rays.deactivate(to_deactivate)

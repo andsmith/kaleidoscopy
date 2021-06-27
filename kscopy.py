@@ -10,6 +10,7 @@ from enum import Enum
 import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import matplotlib.gridspec as gridspec
 
 
 class KScopeState(Enum):
@@ -90,10 +91,7 @@ class Kaleidoscope(object):
         self._colors = {'FPS': (0, 0, 0),
                         'recalculating': (30, 180, 40)}
 
-    def draw_top_diagram(self, flat=False, ax=None):
-        def plot_wrap(x, y, *args, **kwargs):
-            y = np.array(y)
-            return plt.plot(x, y, *args, **kwargs)
+    def draw_3d(self, ax=None):
 
         n = self._mirrors.get_corners().shape[0]
 
@@ -102,24 +100,12 @@ class Kaleidoscope(object):
         color_indices = np.linspace(0, 1.0, n + 1)
         colors = [palette(i) for i in color_indices]
 
-        # draw scope
-        if flat:
-            corners = self._mirrors.get_corners()
-            scope_h = None
-            for i in range(corners.shape[0]):
-                # plot x,z projection
-                scope_h = plot_wrap((corners[i, 0], corners[i, 2]), (corners[i, 1], corners[i, 3]), 'r-', linewidth=2)
-            ax = plt.gca()
-        else:
-            # plot mirrors
-            scope_h, ax = self._mirrors.plot_3d(ax=ax, z_offset=self._top_z)
-            scope_h = [scope_h]
+        # plot mirrors
+        scope_h, ax = self._mirrors.plot_3d(ax=ax, z_offset=self._top_z)
+        scope_h = [scope_h]
 
         # draw eye
-        if flat:
-            eye_h = plot_wrap(0, 0, '.b', markersize=10)
-        else:
-            eye_h = [ax.scatter(0.0, 0.0, 0.0, color='b')]
+        eye_h = [ax.scatter(0.0, 0.0, 0.0, color='b')]
 
         # trace rays, just one row to see how it bounces
         shape = (11, 11)
@@ -135,43 +121,24 @@ class Kaleidoscope(object):
         x = test_intersects[:, 0]
         y = test_intersects[:, 1]
         z = self._image_plane_z
-        if flat:
-            rays_h = plt.plot(x, y, 'ok', markersize=1)
-        else:
-            _ = ax.scatter(x, y, z, color='k')
 
-        _, _, _, bounce_hist = self._mirrors.trace(test_rays,
-                                                   ground_z_cm=self._ground_z,
-                                                   scope_top_z_cm=self._top_z,
-                                                   max_reflect=10,
-                                                   record=True)
-        if flat:
-            handles = [eye_h[0], scope_h[0], rays_h[0]]
-            labels = ["eye", "mirrors", "ray image-plane \nintersections"]
-            plt.legend(handles, labels)
-            plt.axis('equal')
-        else:
-            rays_h = [test_rays.plot_bounce_history(bounce_hist, ax=plt.gca(), flat=False, linewidth=.5)]
-            # set bounding box
-            ax.set_zlim(0, self._ground_z)
-            z_lim = np.array((0, self._ground_z))
-            x_lim = z_lim - np.mean(z_lim)
-            y_lim = z_lim - np.mean(z_lim)
-            ax.scatter(x_lim, y_lim, z_lim, color=(0, 1, 1), alpha=0.0)
-        plt.title("Kaleidoscope diagram (scale cm)")
+        _ = ax.scatter(x, y, z, color='k')
+
+        # set bounding box
+        ax.set_zlim(0, self._ground_z)
+        z_lim = np.array((0, self._ground_z))
+        x_lim = z_lim - np.mean(z_lim)
+        y_lim = z_lim - np.mean(z_lim)
+        ax.scatter(x_lim, y_lim, z_lim, color=(0, 1, 1), alpha=0.0)
 
         return ax
 
     def draw_diagram(self):
-
-        def plot_wrap(x, y, *args, **kwargs):
-            y = np.array(y)
-
-            # y = self._ground_z - y
-            return plt.plot(x, y, *args, **kwargs)
+        fig, (top_ax, side_ax) = plt.subplots(nrows=1, ncols=2, constrained_layout=True)
 
         # draw eye
-        eye_h = plot_wrap(0, 0, '.b', markersize=10)
+        eye_h = top_ax.plot(0, 0, '.b', markersize=10)
+        side_ax.plot(0, 0, '.b', markersize=10)
 
         # draw scope
         corners = self._mirrors.get_corners()
@@ -179,13 +146,15 @@ class Kaleidoscope(object):
         scope_h = None
         for i in range(corners.shape[0]):
             # plot x,z projection
-            scope_h = plot_wrap((corners[i, 0], corners[i, 0]), (z_span[0], z_span[1]), 'r-', linewidth=2)
+            scope_h = side_ax.plot((corners[i, 0], corners[i, 0]),
+                                   (z_span[0], z_span[1]), 'r-', linewidth=2)
+            top_ax.plot((corners[i, 0], corners[i, 2]), (corners[i, 1], corners[i, 3]), 'r-', linewidth=2)
 
         # draw image_plane
-        image_h = plot_wrap([-1, 1], [self._image_plane_z, self._image_plane_z], 'k:')
+        side_ax.plot([-1, 1], [self._image_plane_z, self._image_plane_z], 'k:')
 
         # trace rays, just one row to see how it bounces
-        shape = (1, 135)
+        shape = (31, 31)
 
         test_rays = RayBundle.from_resolution_and_fov(shape, image_plane_z=self._top_z, fov_deg=self._fov_deg,
                                                       square=True)
@@ -193,56 +162,43 @@ class Kaleidoscope(object):
         origins = origins.copy()
         directions = directions.copy()
 
-        def _draw_rays(orgs, dirs, *args, **kwargs):
-            line_starts = []
-            line_stops = []
-            for ray in range(dirs.shape[0]):
-                line_starts.append([orgs[ray, 0], orgs[ray, 2]])
-                line_stops.append([dirs[ray, 0], dirs[ray, 2]])
+        # draw rays from top, hitting image plane
+        test_dists = test_rays.plane_intersect_dists(np.array([0, 0, self._top_z]), np.array([0, 0, 1.0]))
+        test_intersects = np.tile(test_dists, (1, 3)) * directions + origins
+        x = test_intersects[:, 0]
+        y = test_intersects[:, 1]
+        top_ax.plot(x, y, 'ok', markersize=2)
 
-            line_starts, line_stops = np.vstack(line_starts), np.vstack(line_stops)
+        # draw inscribed circle
+        rad = self._mirrors.get_view_rad()
+        theta = np.linspace(0.0, np.pi * 2.0, 201)
+        x = np.cos(theta) * rad
+        y = np.sin(theta) * rad
+        eyehole_h = top_ax.plot(x, y, 'g-', linewidth=3)
 
-            x_coords = np.zeros(3 * line_starts.shape[0])
-            y_coords = x_coords * 0
-            x_coords[::3] = line_starts[:, 0]
-            x_coords[1::3] = line_stops[:, 0]
-            x_coords[2::3] = np.nan
-            y_coords[::3] = line_starts[:, 1]
-            y_coords[1::3] = line_stops[:, 1]
-            y_coords[2::3] = np.nan
-            plt.gca().invert_yaxis()
+        _, distances, n_reflects, bounce_hist = self._mirrors.trace(test_rays,
+                                                                    ground_z_cm=self._ground_z,
+                                                                    scope_top_z_cm=self._top_z,
+                                                                    max_reflect=10,
+                                                                    record=True)
+        # draw rays from side
+        rays_h = test_rays.plot_bounce_history(bounce_hist, ax=side_ax, linewidth=.5)
 
-            return plot_wrap(x_coords, y_coords, *args, **kwargs)
-
-        # _draw_rays(origins, directions, 'k-', linewidth=1)
-        # draw rays
-
-        _, _, distances, bounce_hist = self._mirrors.trace(test_rays,
-                                                          ground_z_cm=self._ground_z,
-                                                          scope_top_z_cm=self._top_z,
-                                                          max_reflect=10,
-                                                          record=True)
-
-        rays_h = test_rays.plot_bounce_history(bounce_hist, ax=plt.gca(), linewidth=.5)
-        # x_coord_lists = [np.array(bounce_hist[0][i])[:, 0].tolist() for i in range(len(bounce_hist[0]))]
-        # x_coords = [[xc for x_coord_list in x_coord_lists for xc in x_coord_list]]
-
-        # target_extent = np.array([np.min(x_coords), np.max(x_coords)])
-        # target_margin = 0.07 * (target_extent[1] - target_extent[0])
-        # target_extent[0] -= target_margin
-        # target_extent[1] += target_margin
         # draw viewed image
         target_extent = [-1., 1.0]
-        target_h = plot_wrap(target_extent, [self._ground_z, self._ground_z], 'k-', linewidth=4)
+        target_h = side_ax.plot(target_extent, [self._ground_z, self._ground_z], 'k-', linewidth=4)
 
-        handles = [eye_h[0], scope_h[0], image_h[0], target_h[0], rays_h[0]]
-        labels = ["eye", "mirrors", "image plane", "image/camera", "rays"]
-        plt.legend(handles, labels)
-        plt.title("Kaleidoscope diagram (scale cm)")
-        plt.axis('equal')
-        plt.show()
-        plt.plot(distances.reshape(-1))
-        plt.show()
+        handles = [eye_h[0], eyehole_h[0], scope_h[0], rays_h[0]]
+        labels = ["eye", "viewhole", "mirrors", "image/camera", "rays"]
+        side_ax.legend(handles, labels)
+        side_ax.set_title("Kaleidoscope - side view (scale cm)")
+        top_ax.set_title("Kaleidoscope - top view (scale cm)")
+        side_ax.set_xlabel('x')
+        side_ax.set_ylabel('z')
+        top_ax.set_xlabel('x')
+        top_ax.set_ylabel('z')
+        top_ax.axis('equal')
+        side_ax.axis('equal')
 
     def _set_rays(self):
         self._rays = RayBundle.from_resolution_and_fov(self._output_resolution,
@@ -433,10 +389,10 @@ def _test_kscope_diagrams():
     geom = NGonPrism(n=4, r=np.sqrt(2.0), height=11.323, phi=np.pi / 4.)
     mirrors = MirrorTube(prism=geom)
     scope = Kaleidoscope(mirrors, ground_z_cm=20.0, fov_deg=60.0)
-    # scope.draw_top_diagram(flat=False)
-    # plt.show()
+
     scope.draw_diagram()
     plt.show()
+    # plt.show()
     # scope.draw_top_diagram(flat=True)
     # plt.show()
 
