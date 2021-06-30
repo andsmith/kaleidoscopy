@@ -134,7 +134,7 @@ class RayBundle(object):
 
         return handle, ax
 
-    def prism_intersect_dists(self, prism):
+    def get_prism_intersections(self, prism, **kwargs):
         """
         Intersection distance from ACTIVE rays to each face of prism
         NOTE:  does NOT clip at facet bounds
@@ -143,17 +143,23 @@ class RayBundle(object):
         :return: N x M distances, within N active rays an M mirrors
         """
         centers, normals = prism.get_mirrors()
-        dists = [self.plane_intersect_dists(centers[i, :], normals[i, :]) for i in range(prism.get_n())]
-        dists = np.hstack(dists)
+        results = [self.get_plane_intersections(centers[i, :],
+                                                normals[i, :],
+                                                **kwargs) for i in range(prism.get_n())]
+        intersects = None
+        dists = np.hstack([result[0] for result in results])
+        if len(results) > 0 and results[0][1] is not None:
+            intersects = np.dstack([result[1] for result in results])
+        return dists, intersects
 
-        return dists
-
-    def plane_intersect_dists(self, point, normal):
+    def get_plane_intersections(self, point, normal, no_points=False):
         """
-        Return the distance to the intersection of ACTIVE rays with given.
+        Find intersection of ACTIVE rays with given plane.
         :param point:  a point on the plane
         :param normal:  normal vector to plane
-        :return: H x 1 distances for N active rays
+        :param no_points:  just calculate distance, not intersection points
+        :return: N distances for N active rays,
+                 N x 3 intersection points for N active rays, or None if no_points is True.
         """
         point = point.reshape(-1)
         normal = normal.reshape(-1)
@@ -165,7 +171,11 @@ class RayBundle(object):
             # parallel rays go to np.inf
             dists = np.dot(point - origins, normal) / np.dot(directions, normal)
 
-        return dists.reshape(-1, 1)
+        dists = dists.reshape(-1, 1)
+        points = None
+        if not no_points:
+            points = origins + dists * directions
+        return dists, points
 
     def deactivate(self, inactive):
         self._active[_double_index(self._active, inactive)] = False
@@ -191,7 +201,7 @@ class RayBundle(object):
     def get_shape(self):
         return self._directions.shape[:2]
 
-    def plot_bounce_history(self, bounce_hist, ax=None, flat=True, **kwargs):
+    def plot_bounce_history(self, bounce_hist, mask=None, ax=None, flat=True, **kwargs):
         if ax is None:
             fig = plt.figure()
             ax = fig.gca() if flat else fig.gca(projection='3d')
@@ -204,25 +214,26 @@ class RayBundle(object):
         line_y0 = []
         line_z0 = []
 
-        shape = self._directions.shape[:2]
-        positions = self._origins.reshape([shape[0], shape[1], 3]) * 0
+        histories = [bounce_hist[ray_i][ray_j]
+                     for ray_i in range(len(bounce_hist))
+                     for ray_j in range(len(bounce_hist[ray_i]))
+                     if mask is not None and mask[ray_i][ray_j]]
+        positions = np.zeros(shape=(len(histories), 3), dtype=np.float64)  # all rays start at origin
+        for ind in range(len(histories)):
+            for b_i, bounce in enumerate(histories[ind]):
+                x = [positions[ind][0], bounce[0]]
+                y = [positions[ind][1], bounce[1]]
+                z = [positions[ind][2], bounce[2]]
+                if b_i > 0:
+                    line_x.extend(x + [np.nan])
+                    line_y.extend(y + [np.nan])
+                    line_z.extend(z + [np.nan])
+                else:
+                    line_x0.extend(x + [np.nan])
+                    line_y0.extend(y + [np.nan])
+                    line_z0.extend(z + [np.nan])
 
-        for ray_i in range(len(bounce_hist)):
-            for ray_j in range(len(bounce_hist[ray_i])):
-                for b_i, bounce in enumerate(bounce_hist[ray_i][ray_j]):
-                    x = [positions[ray_i][ray_j][0], bounce[0]]
-                    y = [positions[ray_i][ray_j][1], bounce[1]]
-                    z = [positions[ray_i][ray_j][2], bounce[2]]
-                    if b_i > 0:
-                        line_x.extend(x + [np.nan])
-                        line_y.extend(y + [np.nan])
-                        line_z.extend(z + [np.nan])
-                    else:
-                        line_x0.extend(x + [np.nan])
-                        line_y0.extend(y + [np.nan])
-                        line_z0.extend(z + [np.nan])
-
-                    positions[ray_i][ray_j] = bounce
+                positions[ind] = bounce
         if flat:
             x_coords = line_x0 + line_x
             y_coords = line_z0 + line_z
@@ -276,12 +287,12 @@ def max_inscribed_circle(corners):
         margin = 0.001
         dists = np.linalg.norm(samples - xy.reshape(1, -1), axis=1)
         err = -np.min(dists)
-        return err +margin
+        return err + margin
 
     bbox = np.vstack([np.min(corners, axis=0),
                       np.max(corners, axis=0)])
     bbox = [bbox[:, 0].tolist(), bbox[:, 1].tolist()]
-    x_init = np.array([0.01, 0.011])
+    x_init = np.mean(corners, axis=0)
     # solution = minimize(error_fn, x_init, method='Nelder-Mead')
     solution = minimize(error_fn, x_init, method='Powell', bounds=bbox)
     pos = solution.x
@@ -314,7 +325,7 @@ class Prism(object):
 
         if inscribed_radius is None:
             center, inscribed_radius = max_inscribed_circle(corners)
-            corners -= np.array(center).reshape(1,2)
+            corners -= np.array(center).reshape(1, 2)
         self._rad = inscribed_radius
 
         self._top_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * top))
@@ -322,7 +333,8 @@ class Prism(object):
 
         # cycle & wrap
         self._top_right = np.hstack((np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * top))
-        self._bottom_right = np.hstack((np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * bottom))
+        self._bottom_right = np.hstack(
+            (np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * bottom))
         self._corners_2d = np.hstack((self._top_left[:, :2], self._top_right[:, :2]))
 
         self._z_centers = (bottom + top) / 2.0
@@ -419,6 +431,7 @@ class RectangularPrism(Prism):
 class MirrorTube(object):
     """
     Handle simulation of light in mirrors.
+    Vectorized ray-tracing!
 
     Define a ortho-prismatic tube (shape) tube of mirrors, i.e. all perpendicular to flat, facing indwards.
     Input is an arbitrary list of 2-d polygon vertices.  (assumed clockwise, mirrors facing inwards)
@@ -454,16 +467,23 @@ class MirrorTube(object):
         :param scope_top_z_cm:  How far from the eye (0,0,0) is the top of the 'scope?
         :param max_reflect:  how many reflections before ray is considered not hitting ground plane?
         :param record:  Save all reflections & return them, else None
-        :return:  list(H x W x 3 array of ray destinations on the ground plane, or NAN if not hitting,
-                       H x W array of ray distances traveled, or NAN if not hitting)
-                       H x W array of number of reflections, or -1 if not hitting,
-                       list of bounce history (ray intersections)
-                           bounce_hist[i][j] = [(x,y,z)_0, (x,y,z)_1, ..., (x,y,z)_ground]
+        :return:  dict('image_map': H x W x 3 array of ray destinations
+                       'ray_distances': H x W array of ray distances traveled, or NAN if not hitting)
+                       'ray_bounce_counts': H x W array of number of reflections, or -1 if not hitting,
+                       'bounce_histories': list of ray intersections, i.e. b_h[i][j] =
+                           [(x,y,z)_0, (x,y,z)_1, ..., (x,y,z)_ground]
+                       'hit_top':  H X W bool, which rays were inside mirror polygon, but not in view-circle
+                       'missed_scope': H x W bool which rays that missed scope entirely )
+
         """
 
-        # list of lists, same shape as ray bundle, each list is a rays's history.
-        bounce_record = [[[] for __ in range(rays.get_shape()[1])] for _ in range(rays.get_shape()[0])]
-        max_dist = 2.0 * ground_z_cm  # FIX
+        result = {'image_map': np.zeros(shape=list(rays.get_shape()) + [3]),
+                  'ray_distances': np.zeros(shape=list(rays.get_shape())),
+                  'ray_bounce_counts': np.zeros(shape=list(rays.get_shape()), dtype=np.int64) - 1,
+                  'missed_scope': np.zeros(shape=list(rays.get_shape()), dtype=bool),
+                  'hit_top': np.zeros(shape=list(rays.get_shape()), dtype=bool),
+                  'bounce_histories': [[[] for __ in range(rays.get_shape()[1])]
+                                       for _ in range(rays.get_shape()[0])]}
 
         def accumulate_bounces(bounce_mask, intersections):
             """
@@ -482,27 +502,36 @@ class MirrorTube(object):
             i_inds = (locs / rays.get_shape()[1]).astype(np.int64)
             j_inds = np.mod(locs, rays.get_shape()[1])
             for n in range(len(locs)):
-                bounce_record[i_inds[n]][j_inds[n]].append(intersections[n])
+                result['bounce_histories'][i_inds[n]][j_inds[n]].append(intersections[n])
                 n += 1
 
         ground_center = np.array([0.0, 0.0, ground_z_cm]).reshape(1, -1)
-        ground_normal = np.array([0.0, 0.0, -1.0])  # towards eye
-
-        out_points = np.zeros(shape=list(rays.get_shape()) + [3])
-        out_dists = np.zeros(shape=list(rays.get_shape()))
-        out_reflects = np.zeros(shape=list(rays.get_shape()), dtype=np.int64) - 1
+        up_normal = np.array([0.0, 0.0, -1.0])  # towards eye
 
         # remember these so as to not hit same thing twice (-1 means invalid, n+1 means ground (bounce!))
         last_hits = np.zeros(np.prod(rays.get_shape()), dtype=np.int64) - 1
+
+        # maximum ray length is constant, so use as error check
+        ray_dist_to_ground = rays.get_plane_intersections(ground_center, up_normal, no_points=True)[0]
+        max_dist = np.max(ray_dist_to_ground) * 1.10  # margin necessary?
+
+        # Check rays inside view-circle
+        r = self._facets.get_inscribed_rad()
+        dist_to_img_plane, img_plane_intersects = rays.get_plane_intersections(np.array([0.0,
+                                                                                         0.0,
+                                                                                         scope_top_z_cm]),
+                                                                               up_normal)
+        radii = np.linalg.norm(img_plane_intersects[:, :2], axis=1)
+        outside_circle = radii > r
 
         # Start rays...
         _, m_normals = self._facets.get_mirrors()
         n = self._facets.get_n()
         rays.set_all_active()
+        hit_top = None  # deactivate these first time through
         for iteration in range(max_reflect):
 
-            active = rays.get_active()  # mask of full array, which are active in this iteration
-            ray_starts, ray_dirs = rays.get_active_rays()
+            active = rays.get_active()  # which rays are active in this iteration, bitmask
             n_active = active.sum()
 
             logging.info("Ray tracing iteration %i / %i - %s %% rays active." % (iteration + 1,
@@ -511,66 +540,65 @@ class MirrorTube(object):
             if np.sum(n_active) == 0:
                 logging.info('\tNo more active rays, trace complete.')
                 break
+            # calculate current rays' distances to all objects
+            mirror_dists, mirror_intersects = rays.get_prism_intersections(self._facets)
+            ground_dists, ground_intersects = rays.get_plane_intersections(ground_center, up_normal)
+            invalid_m_dists = np.isnan(mirror_dists)  # ground intersects should always be valid
 
-            # calculate rays distances to all objects
-            mirror_dists = rays.prism_intersect_dists(self._facets)
-            ground_dists = rays.plane_intersect_dists(ground_center, ground_normal)
-            # calculate intersections of all objects
-            with np.errstate(divide='ignore', invalid='ignore'):  # some may now be inf
-                ground_intersects = ground_dists * ray_dirs + ray_starts
-                m_intersects = [np.tile(mirror_dists[:, m].reshape(-1, 1), (1, 3)) * ray_dirs + ray_starts for m in
-                                range(n)]
-                mirror_intersects = np.dstack(m_intersects)
-            invalid_m_dists = np.isnan(mirror_dists)
-            missed_all_mirrors = invalid_m_dists.copy()
-            # Set disallowed intersections (from previous iteration) to infinity
+            # Turn off disallowed intersections (mirror hit from previous iteration), by setting dist to inf.
             active_last_hits = last_hits[active.reshape(-1)]
-            turn_off_mask = active_last_hits >= 0
-            turn_off_idx = np.where(turn_off_mask)[0], active_last_hits[turn_off_mask]
+            valid_active_last_hits = active_last_hits >= 0
+            turn_off_idx = np.where(valid_active_last_hits)[0], active_last_hits[valid_active_last_hits]
             invalid_m_dists[turn_off_idx] = True
 
-            # Also turn of ray/surface paris that are oriented incorrectly (non-positive distance, or too big)
+            # Also turn of ray/surface paris that are oriented incorrectly (non-positive distance, or too big).
             with np.errstate(divide='ignore', invalid='ignore'):  # some may now be inf
                 diverging = np.logical_or(mirror_dists < 0, np.isinf(mirror_dists))
                 diverging = np.logical_or(mirror_dists > max_dist, diverging)
-
             invalid_m_dists[diverging] = True
 
-            # Now turn of ray/mirror intersections that are below the bottom of the mirror
+            # Now turn of ray/mirror intersections  that are below the bottom of the mirror.
             bottom_z = self._facets.get_height() + scope_top_z_cm
             too_low = mirror_intersects[:, 2, :] > bottom_z
             invalid_m_dists[too_low] = True
-
             mirror_dists[invalid_m_dists] = np.inf
 
-            no_mirror = np.bitwise_and.reduce(np.isinf(mirror_dists), axis=1)
-            logging.info("\t%s rays hit no mirror." % (np.sum(no_mirror),))
-
-            # See if each ray hit a mirror first or the ground
+            # See which rays hit the ground before any mirrors (inside).
             m_hits = np.argmin(mirror_dists, axis=1)  # ray is shortest distance from which mirror?
             closest_dists = mirror_dists[(np.arange(n_active), m_hits)]
-
-            # Hit the ground?  record location & deactivate
             ground_hits = closest_dists > ground_dists.reshape(-1)
-            logging.info("\tGround has %s rays hitting it first." % (np.sum(ground_hits),))
-            if np.sum(ground_hits) != np.sum(no_mirror):
-                logging.warning(
-                    "The number of rays not hitting a mirror is different from the number hitting the ground.")
-            # check for rays going over top
-            if iteration == 0:
-                over_top = np.logical_and(mirror_intersects[:, 2, :] < scope_top_z_cm,
-                                          0.0 < mirror_intersects[:, 2, :])
-                invalid_m_dists[over_top] = True  # mark as invalid
-                missed_all_mirrors = np.bitwise_or.reduce(over_top, axis=1)  # Breaks nonconvex prisms!
-                logging.info("\tFirst iteration has %i rays missing all mirrors, outside prism (%% %.3f)." % (
-                    int(np.sum(missed_all_mirrors)), np.mean(missed_all_mirrors) * 100.))
-                ground_hits = np.logical_or(ground_hits, missed_all_mirrors)
 
+            # check for rays going over top & outside circle (only first time)
+            if iteration == 0:
+                # ray goes over scope if it goes over any mirror (breaks non-convexity)
+                missed_scope = np.logical_and(mirror_intersects[:, 2, :] < scope_top_z_cm,
+                                              0.0 < mirror_intersects[:, 2, :])
+                missed_scope = np.logical_or.reduce(missed_scope, axis=1)
+                hit_top = np.logical_and(np.logical_not(missed_scope), outside_circle)
+
+                logging.info("\tIn first iteration, %i rays hit the top, %i rays miss." % (
+                    np.sum(hit_top), np.sum(missed_scope)))
+
+                # save rays that hit the top
+                hit_top_idx = _double_index(active, hit_top)  # should be all active, but be sure...
+                result['hit_top'][hit_top_idx] = True
+                result['image_map'][hit_top_idx, :] = img_plane_intersects[hit_top, :]
+
+                # and rays that missed
+                missed_scope_idx = _double_index(active, missed_scope)
+                result['missed_scope'][missed_scope_idx] = True
+
+                result['ray_distances'][missed_scope_idx] = dist_to_img_plane[missed_scope].reshape(-1)
+                accumulate_bounces(missed_scope_idx, img_plane_intersects[missed_scope, :])
+                ground_hits = np.logical_or(ground_hits, missed_scope)  # add to list of rays that hit ground
+
+            # save & mark for deactivation all rays that hit the ground.
+            logging.info("\tGround has %s rays hitting it first." % (np.sum(ground_hits),))
             idx = _double_index(active, ground_hits)
-            accumulate_bounces(idx, ground_intersects[ground_hits, :])
-            out_points[idx] = ground_intersects[ground_hits, :]
-            out_dists[idx] += ground_dists[ground_hits].reshape(-1)
-            out_reflects[idx] = iteration
+            accumulate_bounces(idx, ground_intersects[ground_hits, :])  # save history of ground hits
+            result['image_map'][idx] = ground_intersects[ground_hits, :]
+            result['ray_distances'][idx] += ground_dists[ground_hits].reshape(-1)
+            result['ray_bounce_counts'][idx] = iteration
             last_hits[idx.reshape(-1)] = n
 
             # See which rays hit which mirror first
@@ -586,38 +614,41 @@ class MirrorTube(object):
 
                 accumulate_bounces(idx, mirror_intersects[mirror_hits, :, mirror_i])
 
-                distances = rays.reflect(mirror_hits, mirror_intersects[mirror_hits, :, mirror_i], m_normals[mirror_i, :])
-                out_dists[idx] += distances
+                distances = rays.reflect(mirror_hits, mirror_intersects[mirror_hits, :, mirror_i],
+                                         m_normals[mirror_i, :])
+                result['ray_distances'][idx] += distances
 
-            to_deactivate = np.logical_or(ground_hits, no_mirror)
+            to_deactivate = ground_hits
+            if iteration == 0:
+                to_deactivate = np.logical_or(hit_top, to_deactivate)
             rays.deactivate(to_deactivate)
 
-        return out_points.reshape(list(rays.get_shape()) + [3]), \
-               out_dists.reshape(rays.get_shape()), \
-               out_reflects.reshape(rays.get_shape()), \
-               bounce_record
+        return result
 
     def get_image_map(self, plot_map=False, **kwargs):
-        coords, dists, reflects, bounces = self.trace(**kwargs)
+        result = self.trace(**kwargs)
         if plot_map:
             fig, ax = plt.subplots(nrows=1, ncols=2, sharex='all', sharey='all')
-            ax[0].imshow(dists)
-            ax[1].imshow(bounces)
+            ax[0].imshow(result['ray_distances'])
+            ax[1].imshow(result['ray_bounce_counts'])
             plt.suptitle("Image map, distances in [%.3f, %.3f], bounces in [%.i, %.i]." % (
-                np.min(dists), np.max(dists), np.min(bounces), np.max(bounces)))
+                np.min(result['ray_distances']),
+                np.max(result['ray_distances']),
+                np.min(result['ray_bounce_counts']),
+                np.max(result['ray_bounce_counts'])))
             plt.show()
 
-        return coords[:, :, :2], dists, reflects, bounces
+        return result['image_map'][:, :, :2], result
 
 
 def _double_index(mask, sub_mask):
     """
-    Probably could be more efficient
+    :param mask:  N element bool array
+    :param sub_mask:  bool array, length = np.sum(mask)
+    :return:  N element bool array, sum(return) = sum(mask)
     """
     full = mask.copy()
-    for i, active in enumerate(np.where(full.reshape(-1))[0]):
-        index = np.unravel_index(active, full.shape)
-        full[index] = sub_mask[i]
+    full[full] = sub_mask
     return full
 
 
@@ -667,9 +698,9 @@ def make_stained_glass(image, bounces, thresh=.5):
 def test_ray_tracing():
     geom = NGonPrism(n=4, r=np.sqrt(2.0), height=11.323, phi=np.pi / 4.)
     mirrors = MirrorTube(prism=geom, )
-    out_shape = (240,320)
+    out_shape = (240, 320)
     fov_deg = 45.
-    ground_z_cm =20.0
+    ground_z_cm = 20.0
     r = mirrors.get_view_rad()
     top_z = r / np.tan(np.deg2rad(fov_deg) / 2.0)
     print("Test init with mirrors r=%.5f, top_z=%.5f" % (r, top_z))
@@ -684,11 +715,11 @@ def test_ray_tracing():
     img = Image.from_file('test_img.jpg', flip_bgr_rgb=True, px_per_cm=(50, 50))
 
     # ray-trace
-    img_map, dists, n_bounces,bounce_hist = mirrors.get_image_map(rays=rays,
-                                                   ground_z_cm=ground_z_cm,
-                                                   scope_top_z_cm =top_z,
-                                                   max_reflect=100,
-                                                   record=True)
+    img_map, dists, n_bounces, bounce_hist = mirrors.get_image_map(rays=rays,
+                                                                   ground_z_cm=ground_z_cm,
+                                                                   scope_top_z_cm=top_z,
+                                                                   max_reflect=100,
+                                                                   record=True)
 
     plt.imshow(dists)
     plt.colorbar()

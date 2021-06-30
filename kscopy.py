@@ -114,8 +114,8 @@ class Kaleidoscope(object):
         origins = origins.copy()
         directions = directions.copy()
 
-        test_dists = test_rays.plane_intersect_dists(np.array([0, 0, self._top_z]), np.array([0, 0, 1.0]))
-        test_intersects = np.tile(test_dists, (1, 3)) * directions + origins
+        test_dists, test_intersects = test_rays.get_plane_intersections(np.array([0, 0, self._top_z]),
+                                                                        np.array([0, 0, 1.0]))
 
         # draw ray / image-plane intersections
         x = test_intersects[:, 0]
@@ -137,8 +137,8 @@ class Kaleidoscope(object):
         fig, (top_ax, side_ax) = plt.subplots(nrows=1, ncols=2, constrained_layout=True)
 
         # draw eye
-        eye_h = top_ax.plot(0, 0, '.b', markersize=10)
-        side_ax.plot(0, 0, '.b', markersize=10)
+        eye_h = top_ax.plot(0, 0, '.b', markersize=14)
+        side_ax.plot(0, 0, '.b', markersize=14)
 
         # draw scope
         corners = self._mirrors.get_corners()
@@ -150,24 +150,31 @@ class Kaleidoscope(object):
                                    (z_span[0], z_span[1]), 'r-', linewidth=2)
             top_ax.plot((corners[i, 0], corners[i, 2]), (corners[i, 1], corners[i, 3]), 'r-', linewidth=2)
 
-        # draw image_plane
-        side_ax.plot([-1, 1], [self._image_plane_z, self._image_plane_z], 'k:')
-
         # trace rays, just one row to see how it bounces
-        shape = (31, 31)
+        shape = (11, 11)
 
         test_rays = RayBundle.from_resolution_and_fov(shape, image_plane_z=self._top_z, fov_deg=self._fov_deg,
                                                       square=True)
-        origins, directions = test_rays.get_active_rays()
-        origins = origins.copy()
-        directions = directions.copy()
 
-        # draw rays from top, hitting image plane
-        test_dists = test_rays.plane_intersect_dists(np.array([0, 0, self._top_z]), np.array([0, 0, 1.0]))
-        test_intersects = np.tile(test_dists, (1, 3)) * directions + origins
-        x = test_intersects[:, 0]
-        y = test_intersects[:, 1]
-        top_ax.plot(x, y, 'ok', markersize=2)
+        # draw rays from top, hitting image plane (do before trace() changes rays)
+        test_dists, test_intersects = test_rays.get_plane_intersections(np.array([0, 0, self._top_z]),
+                                                                        np.array([0, 0, 1.0]))
+        trace = self._mirrors.trace(test_rays,
+                                    ground_z_cm=self._ground_z,
+                                    scope_top_z_cm=self._top_z,
+                                    max_reflect=10,
+                                    record=True)
+
+        def _plot_ray_subset(mask, *args, **kwargs):
+            x = test_intersects[mask.reshape(-1), 0]
+            y = test_intersects[mask.reshape(-1), 1]
+            return top_ax.plot(x, y, *args, **kwargs)
+
+        good_rays = np.logical_and(np.logical_not(trace['missed_scope']),
+                                   np.logical_not(trace['hit_top']))
+        missed_h = _plot_ray_subset(trace['missed_scope'], 'rx', markersize=8)
+        hit_h = _plot_ray_subset(trace['hit_top'], 'gx', markersize=8)
+        good_rays_h = _plot_ray_subset(good_rays, 'ko', markersize=3)
 
         # draw inscribed circle
         rad = self._mirrors.get_view_rad()
@@ -176,29 +183,33 @@ class Kaleidoscope(object):
         y = np.sin(theta) * rad
         eyehole_h = top_ax.plot(x, y, 'g-', linewidth=3)
 
-        _, distances, n_reflects, bounce_hist = self._mirrors.trace(test_rays,
-                                                                    ground_z_cm=self._ground_z,
-                                                                    scope_top_z_cm=self._top_z,
-                                                                    max_reflect=10,
-                                                                    record=True)
         # draw rays from side
-        rays_h = test_rays.plot_bounce_history(bounce_hist, ax=side_ax, linewidth=.5)
+        rays_h = test_rays.plot_bounce_history(trace['bounce_histories'], mask=good_rays, ax=side_ax, linewidth=.5)
 
-        # draw viewed image
-        target_extent = [-1., 1.0]
+        # draw image target
+        max_x = np.max(trace['image_map'][good_rays, 0].reshape(-1))
+        min_x = np.min(trace['image_map'][good_rays, 0].reshape(-1))
+        target_extent = [min_x-1, max_x+1]
         target_h = side_ax.plot(target_extent, [self._ground_z, self._ground_z], 'k-', linewidth=4)
 
-        handles = [eye_h[0], eyehole_h[0], scope_h[0], rays_h[0]]
-        labels = ["eye", "viewhole", "mirrors", "image/camera", "rays"]
-        side_ax.legend(handles, labels)
+        # draw image_plane
+        image_plane_h = side_ax.plot([-1.66,1.66], [self._image_plane_z, self._image_plane_z], 'k:', linewidth=3)
+
+        side_handles = [eye_h[0], image_plane_h[0], scope_h[0], rays_h[0], target_h[0]]
+        side_labels = ["eye", "image_plane", "mirrors", "rays", "target/camera image"]
+        top_handles = [eye_h[0], scope_h[0], eyehole_h[0], missed_h[0], hit_h[0], good_rays_h[0]]
+        top_labels= ["eye","mirrors",'inscribed circle', 'rays missing scope', 'hitting scope top', 'entering scope']
+        top_ax.legend(top_handles, top_labels)
+        side_ax.legend(side_handles, side_labels, loc='lower right')
         side_ax.set_title("Kaleidoscope - side view (scale cm)")
         top_ax.set_title("Kaleidoscope - top view (scale cm)")
         side_ax.set_xlabel('x')
         side_ax.set_ylabel('z')
         top_ax.set_xlabel('x')
         top_ax.set_ylabel('z')
-        top_ax.axis('equal')
         side_ax.axis('equal')
+        top_ax.axis('equal')
+        side_ax.invert_yaxis()
 
     def _set_rays(self):
         self._rays = RayBundle.from_resolution_and_fov(self._output_resolution,
@@ -386,7 +397,8 @@ class Kaleidoscope(object):
 
 
 def _test_kscope_diagrams():
-    geom = NGonPrism(n=4, r=np.sqrt(2.0), height=11.323, phi=np.pi / 4.)
+    # geom = NGonPrism(n=4, r=np.sqrt(2.0), height=11.323, phi=np.pi / 4.)
+    geom = IsoscelesPrism(theta_deg=45, h_cm=2.0, height=11.0, )
     mirrors = MirrorTube(prism=geom)
     scope = Kaleidoscope(mirrors, ground_z_cm=20.0, fov_deg=60.0)
 
@@ -399,6 +411,7 @@ def _test_kscope_diagrams():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+
     _test_kscope_diagrams()
     # scope.view_live(0)
     # scope.view_image(cv2.imread('test_img.jpg'))
