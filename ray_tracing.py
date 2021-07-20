@@ -237,10 +237,10 @@ class RayBundle(object):
         if flat:
             x_coords = line_x0 + line_x
             y_coords = line_z0 + line_z
-            handle = plt.plot(x_coords, y_coords, 'k-', **kwargs)
+            handle = ax.plot(x_coords, y_coords, 'k-', **kwargs)
         else:
             plt.plot(line_x0, line_y0, line_z0, 'k-', alpha=.5, **kwargs)
-            handle = plt.plot(line_x, line_y, line_z, 'k-', **kwargs)
+            handle = ax.plot(line_x, line_y, line_z, 'k-', **kwargs)
         return handle
 
 
