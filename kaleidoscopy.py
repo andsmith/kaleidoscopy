@@ -4,13 +4,17 @@ import cv2
 import logging
 import time
 from util import make_bounds, TextManager, Image
-import threading
-from ray_tracing import RayBundle, NGonPrism, MirrorTube, IsoscelesPrism
+from threading import Lock
+from ray_tracing import RayBundle, MirrorTube
+from prisms import NGonPrism, IsoscelesPrism, RectangularPrism
 from enum import Enum
 import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import matplotlib.gridspec as gridspec
+from gui_utils.camera_settings import count_cameras, user_pick_resolution
+from gui_utils.gui_picker import ChooseItemDialog
+from gui_utils.camera import Camera
 
 
 class KScopeState(Enum):
@@ -183,8 +187,8 @@ class Kaleidoscope(object):
 
         # draw rays hitting targe
 
-        missed_targ_h = _plot_ray_subset(bottom_ax,trace['image_map'], trace['missed_scope'], 'rx', markersize=8)
-        good_rays_targ_h = _plot_ray_subset(bottom_ax,trace['image_map'], good_rays, 'ko', markersize=3)
+        missed_targ_h = _plot_ray_subset(bottom_ax, trace['image_map'], trace['missed_scope'], 'rx', markersize=8)
+        good_rays_targ_h = _plot_ray_subset(bottom_ax, trace['image_map'], good_rays, 'ko', markersize=3)
 
         # draw inscribed circle
         rad = self._mirrors.get_view_rad()
@@ -424,9 +428,73 @@ def _test_kscope_diagrams():
     # plt.show()
 
 
+def pick_camera():
+    print("Detecting cameras...")
+    n_cams = count_cameras()
+    logging.info("Detected %i cameras." % (n_cams,))
+    if n_cams < 1:
+        raise Exception("Webcam required for this version")
+    elif n_cams == 1:
+        cam_ind = 0
+    else:
+        choices = ['camera 0 (for laptops, probably user-facing)',
+                   'camera 1 (probably forward-facing)']
+        choices.extend(["camera %i" % (ind + 2,) for ind in range(n_cams - 2)])
+        chooser = ChooseItemDialog(prompt="Please select one of the detected cameras:")
+        cam_ind = chooser.ask_text(choices)
+        print("Chose", cam_ind)
+    return cam_ind
+
+
+import sys
+
+
+class KScopyApp(object):
+    MIRROR_TYPES = [IsoscelesPrism, RectangularPrism, NGonPrism]
+    STATES = {'setup': 0, 'running': 0}
+
+    def __init__(self):
+        # state vars
+        self._out_frame = None
+        self._last_frame_time = None
+        self._icon_size = 200
+        self._window_name = "Kaleidoscopy"
+        self._state = KScopyApp.STATES['setup']
+        self._app_flow_lock = Lock()
+
+        # start
+        with self._app_flow_lock:
+            self._cam_ind = pick_camera()
+        self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=True)
+        self._mirror_type = self._user_pick_shape()
+        self._mirrors = self._mirror_type()
+        self._cam.shutdown()
+        sys.exit()
+
+
+        self._mirrors.user_set_params()
+        self._mirrors.user_pick_zoom()
+        self._start()
+
+    def _user_pick_shape(self):
+        icons = [prism_type.get_icon(self._icon_size) for prism_type in KScopyApp.MIRROR_TYPES]
+        choice_ind = ChooseItemDialog(prompt="Select mirror Geometry:").ask_icons([icons])
+        return KScopyApp.MIRROR_TYPES[choice_ind]
+
+    def _proc_frame(self, frame, frame_time):
+        if self._state==KScopyApp.STATES['setup']:
+            return
+        self._out_frame = frame.copy()
+        cv2.imshow(self._window_name, self._out_frame)
+        k = cv2.waitKey(1)
+        if k == ord('q'):
+            self._cam.shutdown()
+            sys.exit()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-
-    _test_kscope_diagrams()
+    scope = KScopyApp()
+    # _test_kscope_diagrams()
     # scope.view_live(0)
     # scope.view_image(cv2.imread('test_img.jpg'))
