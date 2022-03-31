@@ -1,3 +1,5 @@
+from abc import ABC, abstractmethod
+
 import numpy as np
 import cv2
 import logging
@@ -7,7 +9,6 @@ from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from util import make_bounds, pct_str, Image
 from skimage.morphology import skeletonize
-from scipy.optimize import minimize
 
 
 class RayBundle(object):
@@ -244,188 +245,8 @@ class RayBundle(object):
         return handle
 
 
-def _get_normals_from_points(c1, c2, c3):
-    """
-    Plane normals from three non-collinear points in the plane.
-    Oriented so clockwise points away from the clock.
-
-    :param c1: (x,y,z) point in plane
-    :param c2: (x,y,z) point in plane, not equal to c1
-    :param c3: (x,y,z) point in plane, not on line c2-c1
-    :return: (x,y,z) normal pointing "up"
-    """
-    n = 3 if len(c1.shape) == 1 else 2
-
-    co_planar_a = c2 - c1  # right-hand rule, to point inward ...
-    co_planar_b = c3 - c1
-    normals = np.cross(co_planar_a, co_planar_b)
-    normals /= np.linalg.norm(normals)
-    return normals
 
 
-def max_inscribed_circle(corners):
-    """
-    Approximate max (x, y, r) such that all points inside circle are within polygon.
-    Not valid for convex polygons (?)
-    Algorithm:
-        Sample points on polygon (N per side)
-        Optimize over x,y to maximize the minimum distance distance to sample points
-    :param corners: N x 2, list of x, y, corners, counterclockwise
-    :return: (x,y), r of max inscribed circle
-    """
-    n_sample_points_per_line = 50
-    samples = []
-    interp = np.linspace(0.0, 1.0, n_sample_points_per_line).reshape(1, 1, -1)
-    corners_shifted = np.expand_dims(np.vstack([corners[1:, :], corners[0, :]]), 2)
-
-    for i in range(corners.shape[0]):
-        corner_samples = interp * np.expand_dims(corners, 2) + (1.0 - interp) * corners_shifted
-        samples.extend([corner_samples[:, :, i] for i in range(n_sample_points_per_line)])
-    samples = np.vstack(samples)
-
-    def error_fn(xy):
-        margin = 0.001
-        dists = np.linalg.norm(samples - xy.reshape(1, -1), axis=1)
-        err = -np.min(dists)
-        return err + margin
-
-    bbox = np.vstack([np.min(corners, axis=0),
-                      np.max(corners, axis=0)])
-    bbox = [bbox[:, 0].tolist(), bbox[:, 1].tolist()]
-    x_init = np.mean(corners, axis=0)
-    # solution = minimize(error_fn, x_init, method='Nelder-Mead')
-    solution = minimize(error_fn, x_init, method='Powell', bounds=bbox)
-    pos = solution.x
-    r = -error_fn(pos)
-    return pos, r
-
-
-class Prism(object):
-    """
-    Class to handle geometry of a right prism.
-    """
-
-    def __init__(self, corners, height, inscribed_radius=None):
-        """
-        NOTE:  Corners are shifted so inscribed circle center has x,y=0,0, if inscribed_radius is None.
-
-        Init with list of 2d coordinates (i.e. closed polygon loop), representing view from the top.
-        :param corners:  Nx2 array, or N-element list of (x, y) pairs, clockwise oriened corners of a N-sided polygon.
-        :param height: height of prism sides
-        :param inscribed_circle:  ((x, y), r):  must fit inside corners, (not checked),
-            calculated if None, breaks for nonconvex
-
-        """
-        self._height = height
-        bottom = height
-        top = 0
-        if not isinstance(corners, np.ndarray):
-            corners = np.array(corners)
-        self._n = corners.shape[0]
-
-        if inscribed_radius is None:
-            center, inscribed_radius = max_inscribed_circle(corners)
-            corners -= np.array(center).reshape(1, 2)
-        self._rad = inscribed_radius
-
-        self._top_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * top))
-        self._bottom_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * bottom))
-
-        # cycle & wrap
-        self._top_right = np.hstack((np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * top))
-        self._bottom_right = np.hstack(
-            (np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * bottom))
-        self._corners_2d = np.hstack((self._top_left[:, :2], self._top_right[:, :2]))
-
-        self._z_centers = (bottom + top) / 2.0
-
-        self._centers = (self._top_left + self._top_right + self._bottom_left + self._bottom_right) / 4.0  # rectangles
-        normals = [_get_normals_from_points(self._centers[i, :],
-                                            self._top_right[i, :],
-                                            self._top_left[i, :]) for i in range(self._n)]
-        self._normals = np.array(normals)
-
-    def get_height(self):
-        return self._height
-
-    def get_inscribed_rad(self):
-        return self._rad
-
-    def get_corners(self):
-        return self._corners_2d
-
-    def get_mirrors(self):
-        """
-        Get mirrors coords
-        :return:  center(s), normal(s)
-        """
-        return self._centers, self._normals
-
-    def plot_3d(self, ax=None, z_offset=0.0, color=(0.1, .15, 1.0, .5), **kwargs):
-        if ax is None:
-            fig = plt.figure()
-            ax = fig.add_subplot(111, projection='3d')
-
-        offset_vector = np.array([0, 0, z_offset])
-
-        top_right = self._top_right + offset_vector
-        top_left = self._top_left + offset_vector
-
-        bottom_right = self._bottom_right + offset_vector
-        bottom_left = self._bottom_left + offset_vector
-        all_corners = np.hstack([top_right, top_left, bottom_left, bottom_right])
-
-        handles = plot_3d_polygon(all_corners, ax, color=color, **kwargs)
-        return handles, ax
-
-    def get_n(self):
-        return self._n
-
-
-def plot_3d_polygon(corners, ax, color=(0.1, .15, 1.0, .5), **kwargs):
-    handles = []
-    for i in range(corners.shape[0]):
-        x = corners[i, ::3]
-        y = corners[i, 1::3]
-        z = corners[i, 2::3]
-        verts = [list(zip(x, y, z))]  # list necessary python 2/3?
-
-        poly = Poly3DCollection(verts)
-        poly.set_color(color)
-        handles.append(ax.add_collection3d(poly))
-    return handles
-
-
-class IsoscelesPrism(Prism):
-    def __init__(self, theta_deg, h_cm, **kwargs):
-        theta = np.deg2rad(theta_deg)
-        corners = [np.array([-np.sin(theta), -h_cm / 2]),
-                   np.array([0, h_cm / 2]),
-                   np.array([np.sin(theta), -h_cm / 2]), ]
-        corners = np.array(corners + corners[0])
-        super(IsoscelesPrism, self).__init__(corners=corners, **kwargs)
-
-
-class NGonPrism(Prism):
-    def __init__(self, n, r, phi=0.0, **kwargs):
-        logging.info("Making N-gon prism with n=%i, radius %.4f cm, angular offset %.5f." % (n, r, phi))
-
-        theta = np.linspace(0 + phi, 2.0 * np.pi + phi, n + 1)[:-1]
-        corners = np.vstack((np.cos(theta) * r, np.sin(theta) * r)).T
-        super(NGonPrism, self).__init__(corners=corners, **kwargs)
-
-
-class RectangularPrism(Prism):
-    def __init__(self, w_cm, h_cm, **kwargs):
-        hw = w_cm / 2.0
-        hh = h_cm / 2.0
-        corners = [np.array([-hw, -hh]),
-                   np.array([-hw, hh]),
-                   np.array([hw, hh]),
-                   np.array([hw, -hh])]
-        corners = np.array(corners + corners[0])
-
-        super(RectangularPrism, self).__init__(corners=corners, **kwargs)
 
 
 class MirrorTube(object):
@@ -736,4 +557,10 @@ def test_ray_tracing():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    test_ray_tracing()
+    # test_ray_tracing()
+
+    import matplotlib.pyplot as plt
+
+    pic = NGonPrism.get_icon(400)
+    plt.imshow(pic[:, :, ::-1])
+    plt.show()
