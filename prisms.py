@@ -1,1 +1,360 @@
-"""Model of mirror geometry.  Mirrors are perpendicular to image plane and form a convex polygon when viewed from the top  (i.e. are arranged in right prisms)."""from abc import ABC, abstractmethodimport numpy as npfrom mpl_toolkits.mplot3d import Axes3Dfrom mpl_toolkits.mplot3d.art3d import Poly3DCollectionimport matplotlib.pyplot as pltimport loggingimport cv2from scipy.optimize import minimizeclass Prism(ABC):    """    Abstract class to handle geometry.    """    ICON_COLORS = {'background': (254, 250, 245),                   'foreground': (10, 10, 15)}    ICON_LAYOUT = {'fig_top_y': .1,                   'fig_bottom_y': .70,                   'text_bottom_y': 0.90}    def __init__(self, corners, height, inscribed_radius=None):        """        NOTE:  Corners are shifted so inscribed circle center has x,y=0,0, if inscribed_radius is None.        Init with list of 2d coordinates (i.e. closed polygon loop), representing view from the top.        :param corners:  Nx2 array, or N-element list of (x, y) pairs, clockwise oriened corners of a N-sided polygon.        :param height: height of prism sides        :param inscribed_circle:  ((x, y), r):  must fit inside corners, (not checked),            calculated if None, breaks for nonconvex        """        self._height = height        bottom = height        top = 0        if not isinstance(corners, np.ndarray):            corners = np.array(corners)        self._n = corners.shape[0]        if inscribed_radius is None:            center, inscribed_radius = max_inscribed_circle(corners)            corners -= np.array(center).reshape(1, 2)        self._rad = inscribed_radius        self._top_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * top))        self._bottom_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * bottom))        # cycle & wrap        self._top_right = np.hstack((np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * top))        self._bottom_right = np.hstack(            (np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * bottom))        self._corners_2d = np.hstack((self._top_left[:, :2], self._top_right[:, :2]))        self._z_centers = (bottom + top) / 2.0        self._centers = (self._top_left + self._top_right + self._bottom_left + self._bottom_right) / 4.0  # rectangles        normals = [_get_normals_from_points(self._centers[i, :],                                            self._top_right[i, :],                                            self._top_left[i, :]) for i in range(self._n)]        self._normals = np.array(normals)    def get_height(self):        return self._height    def get_inscribed_rad(self):        return self._rad    def get_corners(self):        return self._corners_2d    def get_mirrors(self):        """        Get mirrors coords        :return:  center(s), normal(s)        """        return self._centers, self._normals    def plot_3d(self, ax=None, z_offset=0.0, color=(0.1, .15, 1.0, .5), **kwargs):        if ax is None:            fig = plt.figure()            ax = fig.add_subplot(111, projection='3d')        offset_vector = np.array([0, 0, z_offset])        top_right = self._top_right + offset_vector        top_left = self._top_left + offset_vector        bottom_right = self._bottom_right + offset_vector        bottom_left = self._bottom_left + offset_vector        all_corners = np.hstack([top_right, top_left, bottom_left, bottom_right])        handles = plot_3d_polygon(all_corners, ax, color=color, **kwargs)        return handles, ax    def get_n(self):        return self._n    @classmethod    @abstractmethod    def get_name(cls):        pass    @classmethod    @abstractmethod    def get_icon_vertices(cls):        pass    @classmethod    def get_icon(cls, size):        shape = cls.get_icon_vertices()        name = cls.get_name()        return cls._draw_icon(size, shape, name)    @staticmethod    def _draw_icon(size, shape, name):        fonts = [cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX]        font_name = fonts[0]        thickness = int(size / 200) if size > 200 else 1        font_thickness = thickness        img = np.zeros((size, size, 3)).astype(np.uint8)        img[:, :, :] = Prism.ICON_COLORS['background']        point_start = tuple(np.int64(size * np.array(shape['points'][0])))        for i in range(1, len(shape['points'])):            point = tuple(np.int64(size * np.array(shape['points'][i])))            if i < len(shape['points']) - 1:                cv2.line(img, point_start, point, Prism.ICON_COLORS['foreground'],                         thickness, cv2.LINE_AA)            else:                draw_dashed_line(img, point_start, point, num=4,                                 color=Prism.ICON_COLORS['foreground'],                                 thickness=thickness, linetype=cv2.LINE_AA)            point_start = point        text_pos = size * np.array(shape['text_center_bottom'])        text_x_range = tuple(np.int64(np.array([0.15, 0.85]) * size))        font_scale = get_best_font_scale(name, font_name, font_thickness, text_x_range[1] - text_x_range[0])        (text_width, text_height), _ = cv2.getTextSize(name, font_name, font_scale, font_thickness)        text_anchor = (int(text_pos[0] - text_width / 2.),                       int(text_pos[1]))        img = cv2.putText(img, name, text_anchor, font_name, font_scale,                          Prism.ICON_COLORS['foreground'], font_thickness)        img[text_anchor[1], text_anchor[0], :] = [0, 255, 0]        return imgdef get_best_font_scale(text, font, thickness, max_width):    best_width = (0, 0)    step = 0.25    for scale in np.arange(step, 10.0, step):        (width, _), _ = cv2.getTextSize(text, fontFace=font, fontScale=scale, thickness=thickness)        best_width = (width, scale) if (max_width > width > best_width[0]) else best_width    return best_width[1]def draw_dashed_line(img, start, end, num, color, thickness, linetype=cv2.LINE_AA):    x = np.linspace(start[0], end[0], num * 2).astype(np.int64)    y = np.linspace(start[1], end[1], num * 2).astype(np.int64)    for seg in range(0, num):        p_start = (x[seg * 2], y[seg * 2])        p_end = (x[seg * 2 + 1], y[seg * 2 + 1])        cv2.line(img, p_start, p_end, color, thickness, linetype)def _test_draw_dashed_line():    img = np.zeros((100, 100, 3)).astype(np.uint8)    draw_dashed_line(img, (10, 10), (90, 80), 5, (255, 255, 255), thickness=2)    plt.imshow(img)    plt.show()class IsoscelesPrism(Prism):    def __init__(self, theta_deg, h_cm, **kwargs):        theta = np.deg2rad(theta_deg)        corners = [np.array([-np.sin(theta), -h_cm / 2]),                   np.array([0, h_cm / 2]),                   np.array([np.sin(theta), -h_cm / 2]), ]        corners = np.array(corners + corners[0])        super(IsoscelesPrism, self).__init__(corners=corners, **kwargs)    @classmethod    def get_name(cls):        return "iso. triangle"    @classmethod    def get_icon_vertices(cls):        top_y = super().ICON_LAYOUT['fig_top_y']        bottom_y = super().ICON_LAYOUT['fig_bottom_y']        text_y = super().ICON_LAYOUT['text_bottom_y']        points = [(0.63, bottom_y),                  (0.37, bottom_y),                  (0.5, top_y), ]        final_point_a = np.array(points[0]) * 0.5 + np.array(points[2]) * 0.5        final_point_b = np.array(points[0]) * 0.8 + np.array(points[2]) * 0.2        points.extend([tuple(final_point_a), tuple(final_point_b)])        return {'points': points,                'text_center_bottom': [0.5, text_y]}class NGonPrism(Prism):    def __init__(self, n, r, phi=0.0, **kwargs):        logging.info("Making N-gon prism with n=%i, radius %.4f cm, angular offset %.5f." % (n, r, phi))        theta = np.linspace(0 + phi, 2.0 * np.pi + phi, n + 1)[:-1]        corners = np.vstack((np.cos(theta) * r, np.sin(theta) * r)).T        super(NGonPrism, self).__init__(corners=corners, **kwargs)    @classmethod    def get_name(cls):        return "n-polygon"    @classmethod    def get_icon_vertices(cls):        top_y = super().ICON_LAYOUT['fig_top_y']        bottom_y = super().ICON_LAYOUT['fig_bottom_y']        text_y = super().ICON_LAYOUT['text_bottom_y']        img_center_y = (top_y + bottom_y) / 2.0        img_center_x = 0.5        radius = (bottom_y - top_y) / 2.0        theta = np.pi / 3.0        points = []        for i in range(6):            points.append((radius * np.cos(theta) + img_center_x,                           radius * np.sin(theta) + img_center_y))            theta += np.pi / 3.0        final_point_b = np.array(points[0]) * 0.6 + np.array(points[5]) * 0.4        points.append(tuple(final_point_b))        return {'points': points,                'text_center_bottom': [0.5, text_y]}class RectangularPrism(Prism):    def __init__(self, w_cm, h_cm, **kwargs):        hw = w_cm / 2.0        hh = h_cm / 2.0        corners = [np.array([-hw, -hh]),                   np.array([-hw, hh]),                   np.array([hw, hh]),                   np.array([hw, -hh])]        corners = np.array(corners + corners[0])        super(RectangularPrism, self).__init__(corners=corners, **kwargs)    @classmethod    def get_name(cls):        return "rectangle"    @classmethod    def get_icon_vertices(cls):        top_y = super().ICON_LAYOUT['fig_top_y']        bottom_y = super().ICON_LAYOUT['fig_bottom_y']        text_y = super().ICON_LAYOUT['text_bottom_y']        area_height = bottom_y - top_y        center_y = (top_y + bottom_y) / 2        rect_height = area_height / 2        rect_width = 0.75        return {'points': [(0.5 + rect_width / 2, center_y + rect_height / 2),                           (0.5 - rect_width / 2, center_y + rect_height / 2),                           (0.5 - rect_width / 2, center_y - rect_height / 2),                           (0.5 + rect_width / 2, center_y - rect_height / 2),                           (0.5 + rect_width / 2, center_y - rect_height / 3),                           (0.5 + rect_width / 2, center_y)],                'text_center_bottom': [0.5, text_y]}def max_inscribed_circle(corners):    """    Approximate max (x, y, r) such that all points inside circle are within polygon.    Not valid for convex polygons (?)    Algorithm:        Sample points on polygon (N per side)        Optimize over x,y to maximize the minimum distance distance to sample points    :param corners: N x 2, list of x, y, corners, counterclockwise    :return: (x,y), r of max inscribed circle    """    n_sample_points_per_line = 50    samples = []    interp = np.linspace(0.0, 1.0, n_sample_points_per_line).reshape(1, 1, -1)    corners_shifted = np.expand_dims(np.vstack([corners[1:, :], corners[0, :]]), 2)    for i in range(corners.shape[0]):        corner_samples = interp * np.expand_dims(corners, 2) + (1.0 - interp) * corners_shifted        samples.extend([corner_samples[:, :, i] for i in range(n_sample_points_per_line)])    samples = np.vstack(samples)    def error_fn(xy):        margin = 0.001        dists = np.linalg.norm(samples - xy.reshape(1, -1), axis=1)        err = -np.min(dists)        return err + margin    bbox = np.vstack([np.min(corners, axis=0),                      np.max(corners, axis=0)])    bbox = [bbox[:, 0].tolist(), bbox[:, 1].tolist()]    x_init = np.mean(corners, axis=0)    # solution = minimize(error_fn, x_init, method='Nelder-Mead')    solution = minimize(error_fn, x_init, method='Powell', bounds=bbox)    pos = solution.x    r = -error_fn(pos)    return pos, rdef _get_normals_from_points(c1, c2, c3):    """    Plane normals from three non-collinear points in the plane.    Oriented so clockwise points away from the clock.    :param c1: (x,y,z) point in plane    :param c2: (x,y,z) point in plane, not equal to c1    :param c3: (x,y,z) point in plane, not on line c2-c1    :return: (x,y,z) normal pointing "up"    """    n = 3 if len(c1.shape) == 1 else 2    co_planar_a = c2 - c1  # right-hand rule, to point inward ...    co_planar_b = c3 - c1    normals = np.cross(co_planar_a, co_planar_b)    normals /= np.linalg.norm(normals)    return normalsdef plot_3d_polygon(corners, ax, color=(0.1, .15, 1.0, .5), **kwargs):    handles = []    for i in range(corners.shape[0]):        x = corners[i, ::3]        y = corners[i, 1::3]        z = corners[i, 2::3]        verts = [list(zip(x, y, z))]  # list necessary python 2/3?        poly = Poly3DCollection(verts)        poly.set_color(color)        handles.append(ax.add_collection3d(poly))    return handlesif __name__ == "__main__":    logging.basicConfig(level=logging.INFO)    # test_ray_tracing()    import matplotlib.pyplot as plt    pic = RectangularPrism.get_icon(400)    plt.imshow(pic[:, :, ::-1])    plt.show()
+"""
+Model of mirror geometry.  Mirrors are perpendicular to image plane and form a convex polygon when viewed
+ from the top  (i.e. are arranged in right prisms).
+"""
+
+from abc import ABC, abstractmethod
+import numpy as np
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import matplotlib.pyplot as plt
+import logging
+import cv2
+from scipy.optimize import minimize
+
+
+class Prism(ABC):
+    """
+    Abstract class to handle geometry.
+    """
+    ICON_COLORS = {'background': (254, 250, 245),
+                   'foreground': (10, 10, 15)}
+
+    ICON_LAYOUT = {'fig_top_y': .1,
+                   'fig_bottom_y': .70,
+                   'text_bottom_y': 0.90}
+
+    def __init__(self, corners, height, inscribed_radius=None):
+        """
+        NOTE:  Corners are shifted so inscribed circle center has x,y=0,0, if inscribed_radius is None.
+
+        Init with list of 2d coordinates (i.e. closed polygon loop), representing view from the top.
+        :param corners:  Nx2 array, or N-element list of (x, y) pairs, clockwise oriened corners of a N-sided polygon.
+        :param height: height of prism sides
+        :param inscribed_circle:  ((x, y), r):  must fit inside corners, (not checked),
+            calculated if None, breaks for nonconvex
+
+        """
+        self._height = height
+        bottom = height
+        top = 0
+        if not isinstance(corners, np.ndarray):
+            corners = np.array(corners)
+        self._n = corners.shape[0]
+
+        if inscribed_radius is None:
+            center, inscribed_radius = max_inscribed_circle(corners)
+            corners -= np.array(center).reshape(1, 2)
+        self._rad = inscribed_radius
+
+        self._top_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * top))
+        self._bottom_left = np.hstack((corners, np.ones(self._n).reshape(-1, 1) * bottom))
+
+        # cycle & wrap
+        self._top_right = np.hstack((np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * top))
+        self._bottom_right = np.hstack(
+            (np.vstack((corners[1:, :], corners[0, :])), np.ones(self._n).reshape(-1, 1) * bottom))
+        self._corners_2d = np.hstack((self._top_left[:, :2], self._top_right[:, :2]))
+
+        self._z_centers = (bottom + top) / 2.0
+
+        self._centers = (self._top_left + self._top_right + self._bottom_left + self._bottom_right) / 4.0  # rectangles
+        normals = [_get_normals_from_points(self._centers[i, :],
+                                            self._top_right[i, :],
+                                            self._top_left[i, :]) for i in range(self._n)]
+        self._normals = np.array(normals)
+
+    def get_height(self):
+        return self._height
+
+    def get_inscribed_rad(self):
+        return self._rad
+
+    def get_corners(self):
+        return self._corners_2d
+
+    def get_mirrors(self):
+        """
+        Get mirrors coords
+        :return:  center(s), normal(s)
+        """
+        return self._centers, self._normals
+
+    def plot_3d(self, ax=None, z_offset=0.0, color=(0.1, .15, 1.0, .5), **kwargs):
+        if ax is None:
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+
+        offset_vector = np.array([0, 0, z_offset])
+
+        top_right = self._top_right + offset_vector
+        top_left = self._top_left + offset_vector
+
+        bottom_right = self._bottom_right + offset_vector
+        bottom_left = self._bottom_left + offset_vector
+        all_corners = np.hstack([top_right, top_left, bottom_left, bottom_right])
+
+        handles = plot_3d_polygon(all_corners, ax, color=color, **kwargs)
+        return handles, ax
+
+    def get_n(self):
+        return self._n
+
+    @classmethod
+    @abstractmethod
+    def get_name(cls):
+        pass
+
+    @classmethod
+    @abstractmethod
+    def get_icon_vertices(cls):
+        pass
+
+    @classmethod
+    def get_icon(cls, size):
+        shape = cls.get_icon_vertices()
+        name = cls.get_name()
+        return cls._draw_icon(size, shape, name)
+
+    @staticmethod
+    def _draw_icon(size, shape, name):
+        fonts = [cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX]
+        font_name = fonts[0]
+        thickness = int(size / 200) if size > 200 else 1
+        font_thickness = thickness
+
+        img = np.zeros((size, size, 3)).astype(np.uint8)
+        img[:, :, :] = Prism.ICON_COLORS['background']
+        point_start = tuple(np.int64(size * np.array(shape['points'][0])))
+
+        for i in range(1, len(shape['points'])):
+            point = tuple(np.int64(size * np.array(shape['points'][i])))
+
+            if i < len(shape['points']) - 1:
+                cv2.line(img, point_start, point, Prism.ICON_COLORS['foreground'],
+                         thickness, cv2.LINE_AA)
+            else:
+                draw_dashed_line(img, point_start, point, num=4,
+                                 color=Prism.ICON_COLORS['foreground'],
+                                 thickness=thickness, linetype=cv2.LINE_AA)
+            point_start = point
+
+        text_pos = size * np.array(shape['text_center_bottom'])
+        text_x_range = tuple(np.int64(np.array([0.15, 0.85]) * size))
+        font_scale = get_best_font_scale(name, font_name, font_thickness, text_x_range[1] - text_x_range[0])
+
+        (text_width, text_height), _ = cv2.getTextSize(name, font_name, font_scale, font_thickness)
+
+        text_anchor = (int(text_pos[0] - text_width / 2.),
+                       int(text_pos[1]))
+
+        img = cv2.putText(img, name, text_anchor, font_name, font_scale,
+                          Prism.ICON_COLORS['foreground'], font_thickness)
+        img[text_anchor[1], text_anchor[0], :] = [0, 255, 0]
+
+        return img
+
+
+def get_best_font_scale(text, font, thickness, max_width):
+    best_width = (0, 0)
+    step = 0.25
+    for scale in np.arange(step, 10.0, step):
+        (width, _), _ = cv2.getTextSize(text, fontFace=font, fontScale=scale, thickness=thickness)
+        best_width = (width, scale) if (max_width > width > best_width[0]) else best_width
+    return best_width[1]
+
+
+def draw_dashed_line(img, start, end, num, color, thickness, linetype=cv2.LINE_AA):
+    x = np.linspace(start[0], end[0], num * 2).astype(np.int64)
+    y = np.linspace(start[1], end[1], num * 2).astype(np.int64)
+    for seg in range(0, num):
+        p_start = (x[seg * 2], y[seg * 2])
+        p_end = (x[seg * 2 + 1], y[seg * 2 + 1])
+        cv2.line(img, p_start, p_end, color, thickness, linetype)
+
+
+def _test_draw_dashed_line():
+    img = np.zeros((100, 100, 3)).astype(np.uint8)
+    draw_dashed_line(img, (10, 10), (90, 80), 5, (255, 255, 255), thickness=2)
+    plt.imshow(img)
+    plt.show()
+
+
+class IsoscelesPrism(Prism):
+    def __init__(self, theta_deg, h_cm, **kwargs):
+        theta = np.deg2rad(theta_deg)
+        corners = [np.array([-np.sin(theta), -h_cm / 2]),
+                   np.array([0, h_cm / 2]),
+                   np.array([np.sin(theta), -h_cm / 2]), ]
+        corners = np.array(corners + corners[0])
+        super(IsoscelesPrism, self).__init__(corners=corners, **kwargs)
+
+    @classmethod
+    def get_name(cls):
+        return "iso. triangle"
+
+    @classmethod
+    def get_icon_vertices(cls):
+        top_y = super().ICON_LAYOUT['fig_top_y']
+        bottom_y = super().ICON_LAYOUT['fig_bottom_y']
+        text_y = super().ICON_LAYOUT['text_bottom_y']
+        points = [(0.63, bottom_y),
+                  (0.37, bottom_y),
+                  (0.5, top_y), ]
+
+        final_point_a = np.array(points[0]) * 0.5 + np.array(points[2]) * 0.5
+        final_point_b = np.array(points[0]) * 0.8 + np.array(points[2]) * 0.2
+        points.extend([tuple(final_point_a), tuple(final_point_b)])
+        return {'points': points,
+                'text_center_bottom': [0.5, text_y]}
+
+
+class NGonPrism(Prism):
+    def __init__(self, n, r, phi=0.0, **kwargs):
+        logging.info("Making N-gon prism with n=%i, radius %.4f cm, angular offset %.5f." % (n, r, phi))
+
+        theta = np.linspace(0 + phi, 2.0 * np.pi + phi, n + 1)[:-1]
+        corners = np.vstack((np.cos(theta) * r, np.sin(theta) * r)).T
+        super(NGonPrism, self).__init__(corners=corners, **kwargs)
+
+    @classmethod
+    def get_name(cls):
+        return "n-polygon"
+
+    @classmethod
+    def get_icon_vertices(cls):
+        top_y = super().ICON_LAYOUT['fig_top_y']
+        bottom_y = super().ICON_LAYOUT['fig_bottom_y']
+        text_y = super().ICON_LAYOUT['text_bottom_y']
+
+        img_center_y = (top_y + bottom_y) / 2.0
+        img_center_x = 0.5
+
+        radius = (bottom_y - top_y) / 2.0
+
+        theta = np.pi / 3.0
+        points = []
+        for i in range(6):
+            points.append((radius * np.cos(theta) + img_center_x,
+                           radius * np.sin(theta) + img_center_y))
+            theta += np.pi / 3.0
+        final_point_b = np.array(points[0]) * 0.6 + np.array(points[5]) * 0.4
+        points.append(tuple(final_point_b))
+
+        return {'points': points,
+                'text_center_bottom': [0.5, text_y]}
+
+
+class RectangularPrism(Prism):
+    def __init__(self, w_cm, h_cm, **kwargs):
+        hw = w_cm / 2.0
+        hh = h_cm / 2.0
+        corners = [np.array([-hw, -hh]),
+                   np.array([-hw, hh]),
+                   np.array([hw, hh]),
+                   np.array([hw, -hh])]
+        corners = np.array(corners + corners[0])
+
+        super(RectangularPrism, self).__init__(corners=corners, **kwargs)
+
+    @classmethod
+    def get_name(cls):
+        return "rectangle"
+
+    @classmethod
+    def get_icon_vertices(cls):
+        top_y = super().ICON_LAYOUT['fig_top_y']
+        bottom_y = super().ICON_LAYOUT['fig_bottom_y']
+        text_y = super().ICON_LAYOUT['text_bottom_y']
+        area_height = bottom_y - top_y
+        center_y = (top_y + bottom_y) / 2
+        rect_height = area_height / 2
+        rect_width = 0.75
+        return {'points': [(0.5 + rect_width / 2, center_y + rect_height / 2),
+                           (0.5 - rect_width / 2, center_y + rect_height / 2),
+                           (0.5 - rect_width / 2, center_y - rect_height / 2),
+                           (0.5 + rect_width / 2, center_y - rect_height / 2),
+                           (0.5 + rect_width / 2, center_y - rect_height / 3),
+                           (0.5 + rect_width / 2, center_y)],
+                'text_center_bottom': [0.5, text_y]}
+
+
+def max_inscribed_circle(corners):
+    """
+    Approximate max (x, y, r) such that all points inside circle are within polygon.
+    Not valid for convex polygons (?)
+    Algorithm:
+        Sample points on polygon (N per side)
+        Optimize over x,y to maximize the minimum distance distance to sample points
+    :param corners: N x 2, list of x, y, corners, counterclockwise
+    :return: (x,y), r of max inscribed circle
+    """
+    n_sample_points_per_line = 50
+    samples = []
+    interp = np.linspace(0.0, 1.0, n_sample_points_per_line).reshape(1, 1, -1)
+    corners_shifted = np.expand_dims(np.vstack([corners[1:, :], corners[0, :]]), 2)
+
+    for i in range(corners.shape[0]):
+        corner_samples = interp * np.expand_dims(corners, 2) + (1.0 - interp) * corners_shifted
+        samples.extend([corner_samples[:, :, i] for i in range(n_sample_points_per_line)])
+    samples = np.vstack(samples)
+
+    def error_fn(xy):
+        margin = 0.001
+        dists = np.linalg.norm(samples - xy.reshape(1, -1), axis=1)
+        err = -np.min(dists)
+        return err + margin
+
+    bbox = np.vstack([np.min(corners, axis=0),
+                      np.max(corners, axis=0)])
+    bbox = [bbox[:, 0].tolist(), bbox[:, 1].tolist()]
+    x_init = np.mean(corners, axis=0)
+    # solution = minimize(error_fn, x_init, method='Nelder-Mead')
+    solution = minimize(error_fn, x_init, method='Powell', bounds=bbox)
+    pos = solution.x
+    r = -error_fn(pos)
+    return pos, r
+
+
+def _get_normals_from_points(c1, c2, c3):
+    """
+    Plane normals from three non-collinear points in the plane.
+    Oriented so clockwise points away from the clock.
+
+    :param c1: (x,y,z) point in plane
+    :param c2: (x,y,z) point in plane, not equal to c1
+    :param c3: (x,y,z) point in plane, not on line c2-c1
+    :return: (x,y,z) normal pointing "up"
+    """
+    n = 3 if len(c1.shape) == 1 else 2
+
+    co_planar_a = c2 - c1  # right-hand rule, to point inward ...
+    co_planar_b = c3 - c1
+    normals = np.cross(co_planar_a, co_planar_b)
+    normals /= np.linalg.norm(normals)
+    return normals
+
+
+def plot_3d_polygon(corners, ax, color=(0.1, .15, 1.0, .5), **kwargs):
+    handles = []
+    for i in range(corners.shape[0]):
+        x = corners[i, ::3]
+        y = corners[i, 1::3]
+        z = corners[i, 2::3]
+        verts = [list(zip(x, y, z))]  # list necessary python 2/3?
+
+        poly = Poly3DCollection(verts)
+        poly.set_color(color)
+        handles.append(ax.add_collection3d(poly))
+    return handles
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    # test_ray_tracing()
+
+    import matplotlib.pyplot as plt
+
+    pic = RectangularPrism.get_icon(400)
+    plt.imshow(pic[:, :, ::-1])
+    plt.show()
