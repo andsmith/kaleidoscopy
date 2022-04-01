@@ -463,9 +463,14 @@ class KScopyApp(object):
         self._app_flow_lock = Lock()
 
         # start
-        with self._app_flow_lock:
-            self._cam_ind = pick_camera()
-        self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=True)
+        #with self._app_flow_lock:
+        #    self._cam_ind = pick_camera()
+
+        #self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=True)
+
+        self._cam_ind=0
+        self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=False)
+
         self._mirror_type = self._user_pick_shape()
         self._mirrors = self._mirror_type()
         self._cam.shutdown()
