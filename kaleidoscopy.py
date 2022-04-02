@@ -4,7 +4,7 @@ import cv2
 import logging
 import time
 from util import make_bounds, TextManager, Image
-from threading import Lock
+from threading import Lock, Event
 from ray_tracing import RayBundle, MirrorTube
 from prisms import NGonPrism, IsoscelesPrism, RectangularPrism
 from enum import Enum
@@ -15,6 +15,7 @@ import matplotlib.gridspec as gridspec
 from gui_utils.camera_settings import count_cameras, user_pick_resolution
 from gui_utils.gui_picker import ChooseItemDialog
 from gui_utils.camera import Camera
+from gui_utils.text_annotation import StatusMessages
 
 
 class KScopeState(Enum):
@@ -451,7 +452,11 @@ import sys
 
 class KScopyApp(object):
     MIRROR_TYPES = [IsoscelesPrism, RectangularPrism, NGonPrism]
-    STATES = {'setup': 0, 'running': 0}
+    STATES = {'setup': 0, 'running': 1, 'shaping': 2}
+
+    _OSD_TEXT_COLOR = (255, 254, 250)
+    _OSD_BKG_COLOR = (118, 100, 90)
+    _OSD_ALPHA = 0.65
 
     def __init__(self):
         # state vars
@@ -463,38 +468,67 @@ class KScopyApp(object):
         self._app_flow_lock = Lock()
 
         # start
-        #with self._app_flow_lock:
+        # with self._app_flow_lock:
         #    self._cam_ind = pick_camera()
 
-        #self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=True)
+        # self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=True)
+        self._wait = Event()
 
-        self._cam_ind=0
+        self._cam_ind = 0
         self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=False)
-
         self._mirror_type = self._user_pick_shape()
         self._mirrors = self._mirror_type()
+        self._cam.start()
+        self._resolution = self._cam.get_resolution(wait=True)
+        image_shape = (self._resolution[1], self._resolution[0], 3)
+        self._status_bar = StatusMessages(image_shape, self._OSD_TEXT_COLOR,
+                                          self._OSD_BKG_COLOR,
+                                          bkg_alpha=self._OSD_ALPHA)
+
+        logging.info("Got resolution: %s" % (self._resolution,))
+        self._user_shape_mirrors()
         self._cam.shutdown()
         sys.exit()
-
-
-        self._mirrors.user_set_params()
-        self._mirrors.user_pick_zoom()
+        self.user_pick_zoom()
         self._start()
 
+    def _user_shape_mirrors(self):
+        """
+        User sets parameters of selected mirror arrangement.
+        """
+        self._state = self.STATES['shaping']  # now camera frames go to shaping method of prism
+        shaping_instructions, mouse_callback = self._mirrors.start_shaping(self._window_name, self._wait)
+        self._pending_mouse_callback = mouse_callback
+        self._status_bar.add_msg(shaping_instructions, duration_sec=0)
+        self._wait.wait()
+        self._wait.clear()
+
     def _user_pick_shape(self):
+        """
+        User selects type of mirror arrangement.
+        """
         icons = [prism_type.get_icon(self._icon_size) for prism_type in KScopyApp.MIRROR_TYPES]
         choice_ind = ChooseItemDialog(prompt="Select mirror Geometry:").ask_icons([icons])
         return KScopyApp.MIRROR_TYPES[choice_ind]
 
-    def _proc_frame(self, frame, frame_time):
-        if self._state==KScopyApp.STATES['setup']:
+    def _proc_frame(self, in_frame, frame_time):
+        if self._state == KScopyApp.STATES['setup']:
             return
-        self._out_frame = frame.copy()
+        elif self._state == KScopyApp.STATES['shaping']:
+            frame = self._mirrors.get_masked_image(in_frame)
+        else:
+            frame = in_frame.copy()
+
+        self._status_bar.annotate_img(frame)
+        self._out_frame = frame
         cv2.imshow(self._window_name, self._out_frame)
         k = cv2.waitKey(1)
         if k == ord('q'):
             self._cam.shutdown()
-            sys.exit()
+
+        if self._pending_mouse_callback is not None:
+            cv2.setMouseCallback(self._window_name, self._pending_mouse_callback)
+            self._pending_mouse_callback = None
 
 
 if __name__ == "__main__":
