@@ -28,7 +28,7 @@ class MirrorPrism(ABC):
                    'fig_bottom_y': .70,
                    'text_bottom_y': 0.90}
 
-    SHAPING_INSTRUCTIONS = "Move moues to change shape.  Hit SPACE-key to continue..."
+    SHAPING_INSTRUCTIONS = "Click & drag mouse to set shape, then hit the SPACE-key..."
 
     def __init__(self):
 
