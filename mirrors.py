@@ -16,6 +16,8 @@ from scipy.optimize import minimize
 from gui_utils.mouse import MouseState
 from gui_utils.text_annotation import get_best_font_scale
 
+import keyboard
+
 
 class MirrorPrism(ABC):
     """
@@ -28,18 +30,23 @@ class MirrorPrism(ABC):
                    'fig_bottom_y': .70,
                    'text_bottom_y': 0.90}
 
-    SHAPING_INSTRUCTIONS = "Click & drag mouse to set shape, then hit the SPACE-key..."
+    SHAPING_INSTRUCTIONS = ["Shape Mirror Geometry:  Hit SPACE-key when done...",
+                            " SHIFT + Left-click + Drag up-and-down:  Aperture size"]
+    _MIN_APERTURE_SCALE = 0.001
 
     def __init__(self):
-
+        self._aperture_scale = 0.95
         self._image_shape = None
         self._mask = None
         self._shaping_finish_event = None
         self._shaping_window_name = None
         self._mouse_state = MouseState()
+        self._mouse_pos_orig = None
+        self._base_aperture_scale = None
+
 
     @abstractmethod
-    def get_rel_shape(self):
+    def get_rel_shape(self, scale=1.0, **kwargs):
         """
         Get shape of mirrors, scaled to fit into unit square.
         """
@@ -49,11 +56,13 @@ class MirrorPrism(ABC):
         """
         User sets shape of mirror arrangement.
         """
+        print("Start shaping:", finished_event)
         self._shaping_window_name = window_name
         self._shaping_finish_event = finished_event
         return self.SHAPING_INSTRUCTIONS, self.handle_mouse_adjust
 
     def _done_shaping(self):
+        print("Start shaping:", self._shaping_finish_event)
         self._shaping_finish_event.set()
         self._shaping_finish_event = None
         cv2.setMouseCallback(self._shaping_window_name, lambda *args: None)
@@ -61,12 +70,38 @@ class MirrorPrism(ABC):
     def handle_mouse_adjust(self, *args, **kwargs):
         """
         CV2 callback for mouse events
+          if "SHIFT" is down,  adjusts the aperture size,
+          else  the other params are adjusted by the sub-class.
         """
-        position, motion,  button_change, button_state = self._mouse_state.update_state(*args, **kwargs)
-        self._mouse_adjust( position, motion, button_change, button_state)
+        position, motion, button_change, button_state = self._mouse_state.update_state(*args, **kwargs)
+
+        if keyboard.is_pressed('shift'):
+            print(button_change)
+
+            if button_change == 'l-down':
+                self._mouse_pos_orig = position
+                self._base_aperture_scale = self._aperture_scale
+            elif button_state[0] == 1:  # left-down
+                distance = (self._mouse_pos_orig[1] - position[1]) / 400.0
+                self._aperture_scale = self._base_aperture_scale + distance
+                if self._aperture_scale < self._MIN_APERTURE_SCALE:
+                    self._aperture_scale = self._MIN_APERTURE_SCALE
+                if self._aperture_scale > 1.0:
+                    self._aperture_scale = 1.0
+                self._mask = None
+
+            elif button_change == 'l-up':
+                self._base_aperture_scale = None
+                self._mouse_pos_orig = None
+        else:
+            self._mouse_adjust(position, motion, button_change, button_state)
 
     @abstractmethod
     def _mouse_adjust(self, pos, d_pos, d_button, button_state):
+        """
+        Adjust shape-specific mirror params using mouse
+        NOTE:  right-mouse click is used by this parent class.
+        """
         pass
 
     def handle_keyboard_adjust(self, k):
@@ -74,6 +109,8 @@ class MirrorPrism(ABC):
         Used for shaping mirror params, overridable, but needs to call _done_shaping when the right key is hit, etc.
         """
         k = k & 0xFF
+        if k == 0:
+            print("ENTER")
         if k == ord(' '):
             print("SPACE")
             self._done_shaping()
@@ -82,8 +119,8 @@ class MirrorPrism(ABC):
         """
         :param res:  (w, h) of image  (i.e. reverse from numpy)
         """
-        points = self.get_rel_shape()
-        side_length = np.min(res)
+        points = self.get_rel_shape(self._aperture_scale)
+        side_length = np.min(res[:2])
 
         x_offset = np.max((0, res[0] - side_length)) / 2
         y_offset = np.max((0, res[1] - side_length)) / 2
@@ -200,7 +237,7 @@ class MirrorPrism(ABC):
 
     @staticmethod
     def _draw_icon(size, shape, name):
-        fonts = [cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX]
+        fonts = [cv2.FONT_HERSHEY_SCRIPT_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX]
         font_name = fonts[0]
         thickness = int(size / 200) if size > 200 else 1
         font_thickness = thickness
@@ -212,7 +249,7 @@ class MirrorPrism(ABC):
         for i in range(1, len(shape['points'])):
             point = tuple(np.int64(size * np.array(shape['points'][i])))
 
-            if i < len(shape['points']) - 1:
+            if not shape['final_line_dashed'] or i < len(shape['points']) - 1:
                 cv2.line(img, point_start, point, MirrorPrism.ICON_COLORS['foreground'],
                          thickness, cv2.LINE_AA)
             else:
@@ -251,7 +288,6 @@ def _test_draw_dashed_line():
     draw_dashed_line(img, (10, 10), (90, 80), 5, (255, 255, 255), thickness=2)
     plt.imshow(img)
     plt.show()
-
 
 
 def max_inscribed_circle(corners):
