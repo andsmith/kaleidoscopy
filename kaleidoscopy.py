@@ -58,8 +58,7 @@ class KScopyApp(object):
                      'last_update_time': time.time() - self._FPS_PERIOD_SEC - 1.0,
                      'fps_in': 0,
                      'fps_out': 0,
-                     'fps_drop': 0,
-                     'OSD_lines': []}
+                     'fps_drop': 0}
 
         self._drop_frame_lock = Lock()
 
@@ -80,17 +79,25 @@ class KScopyApp(object):
             image_shape = (self._resolution[1], self._resolution[0], 3)
             self._status_bar = StatusMessages(image_shape, self._OSD_TEXT_COLOR,
                                               self._OSD_BKG_COLOR,
-                                              bkg_alpha=self._OSD_ALPHA, spacing=10, max_font_scale=3.0)
+                                              bkg_alpha=self._OSD_ALPHA, spacing=10, max_font_scale=1.0)
             self._user_shape_mirrors()
 
-            print("Starting scope...")
-            self._state = KScopeState.running
+            self._run()
+
 
         except ShutdownException:
             print("App Shutdown - by exception")
             pass
 
         print("MAIN_APP END")
+
+    def _run(self):
+        print("Starting scope...")
+        self._state = KScopeState.running
+
+        # set main help-text
+        self._status_bar.clear()
+        self._status_bar.add_msgs(self.RUNNING_MESSAGES, "Help")
 
     def _shutdown(self):
         self._state = KScopeState.shutdown
@@ -122,7 +129,7 @@ class KScopyApp(object):
         shaping_instructions, mouse_callback = self._mirrors.start_shaping(self._window_name, self._waiter)
         self._pending_mouse_callback = mouse_callback
         self._status_bar.clear()
-        self._status_bar.add_msgs(shaping_instructions, duration_sec=0)
+        self._status_bar.add_msgs(shaping_instructions, "shaping")
 
         self._wait()  # clears wait after user accepts?
         logging.info("Done waiting for shaping")
@@ -183,6 +190,7 @@ class KScopyApp(object):
         self._out_frame_time = time.time()
         cv2.imshow(self._window_name, self._out_frame)
         k = cv2.waitKey(1)
+        self._fps['n_out'] += 1
 
         # KEYBOARD
         if k == ord('q'):
@@ -221,13 +229,11 @@ class KScopyApp(object):
             self._fps['n_in'] = 0
             self._fps['n_out'] = 0
             self._fps['n_dropped'] = 0
-            self._fps['OSD_lines'] = self.RUNNING_MESSAGES + ['  ',
-                                                              "Ray-tracing:  %s" % (self._get_raytracing_status(),),
-                                                              "FPS:  in = %.3f,  out = %.3f,  drop = %i" % (
-                                                                  self._fps['fps_in'], self._fps['fps_out'],
-                                                                  self._fps['fps_drop'])]
 
-            self._status_bar.add_msgs(self._fps['OSD_lines'], self._FPS_PERIOD_SEC)
+            self._status_bar.add_msg("FPS:  in = %.3f,  out = %.3f,  drop = %i" % (
+                                                                  self._fps['fps_in'], self._fps['fps_out'],
+                                                                  self._fps['fps_drop']), "fps")
+            self._fps['last_update_time'] = time.time()
 
     def _get_raytracing_status(self):
         return "(ray-tracing status goes here)"
