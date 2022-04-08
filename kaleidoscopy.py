@@ -1,12 +1,12 @@
-import pylab as plt
+#import pylab as plt
 import numpy as np
 import cv2
 import logging
 import time
-from util import make_bounds, TextManager, Image
+# from util import make_bounds, TextManager, Image
 from threading import Lock, Event, enumerate, get_ident, Thread
-from ray_tracing import RayBundle, MirrorTube, RayTracer
-from prisms import NGonPrism, IsoscelesPrism, RectangularPrism, CirclePrism, PRISMS
+from ray_tracing import  RayTracer
+from prisms import  PRISMS
 from enum import Enum
 from gui_utils.gui_picker import ChooseItemDialog
 from gui_utils.camera import Camera, pick_camera
