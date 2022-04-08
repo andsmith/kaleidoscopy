@@ -110,7 +110,7 @@ class MirrorPrism(ABC):
         """
         pass
 
-    def _get_inscribed_rectangle(self, xy_resolution, margin=0.05):
+    def get_inscribed_rectangle(self, xy_resolution, margin=0.05):
         """
         Get largest rectangle fitting inside shape, leaving margin space.
         :param xy_resolution:  width,height of rectangle
