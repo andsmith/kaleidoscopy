@@ -12,10 +12,10 @@ import logging
 from threading import Lock
 import cv2
 from scipy.optimize import minimize
-
+from pynput import keyboard
 from gui_utils.mouse import MouseKeyboardState, ButtonStates, MouseButtons
 from gui_utils.text_annotation import get_best_font_scale
-
+import faulthandler
 
 class MirrorPrism(ABC):
     """
@@ -64,7 +64,7 @@ class MirrorPrism(ABC):
         logging.info("Finished event set...")
         self._shaping_finish_event = None
         cv2.setMouseCallback(self._shaping_window_name, lambda *args: None)
-        self._set_geometry()
+        #self._set_geometry()
 
     def handle_mouse_adjust(self, *args, **kwargs):
         """
@@ -75,7 +75,7 @@ class MirrorPrism(ABC):
         mouse_keyboard_state = self._mouse_state.update_state(*args, **kwargs)
 
         if mouse_keyboard_state['mouse_buttons'][MouseButtons.LEFT] is not None and \
-                mouse_keyboard_state['mod_keys']['shift']:
+                mouse_keyboard_state['mod_keys'][keyboard.Key.shift]:
 
             if self._mouse_pos_orig is None:  # first time
                 self._mouse_pos_orig = mouse_keyboard_state['mouse_position']
@@ -93,7 +93,7 @@ class MirrorPrism(ABC):
             self._base_aperture_scale = None
             self._mouse_pos_orig = None
 
-        if not mouse_keyboard_state['mod_keys']['shift']:
+        if not mouse_keyboard_state['mod_keys'][keyboard.Key.shift]:
             # shape sub-classes
             self._mouse_adjust(mouse_keyboard_state['mouse_position'],
                                mouse_keyboard_state['motion'],
@@ -155,6 +155,7 @@ class MirrorPrism(ABC):
         if k == 0:
             print("ENTER")
         if k == ord(' '):
+            logging.info("Done shaping.")
             self._done_shaping()
 
     def _make_mask(self, res):
@@ -405,5 +406,7 @@ def plot_3d_polygon(corners, ax, color=(0.1, .15, 1.0, .5), **kwargs):
 
 
 if __name__ == "__main__":
+    import ipdb; ipdb.set_trace()
+    faulthandler.enable()
     logging.basicConfig(level=logging.INFO)
     # test_ray_tracing()

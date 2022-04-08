@@ -203,7 +203,6 @@ class KScopyApp(object):
         self._fps['n_out'] += 1
 
         # KEYBOARD
-
         if ord('q') == k & 0xff:
             self._shutdown()  # catch-all
 
