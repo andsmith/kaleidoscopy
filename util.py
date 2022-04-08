@@ -9,6 +9,15 @@ import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
+#####
+## https://bryceboe.com/2006/10/23/line-segment-intersection-algorithm/
+
+def ccw(A, B, C):
+    return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x)
+
+def lines_intersect(A, B, C, D):
+    return ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D)
+####
 
 class Image(object):
     """
@@ -83,7 +92,7 @@ class Image(object):
         # doesn't move with pan/zoom ...
         ax.imshow(self._img,
                   cmap=plt.cm.BrBG,
-                  interpolation='nearest',aspect='auto',
+                  interpolation='nearest', aspect='auto',
                   origin='lower', extent=[-self._span_x, self._span_x,
                                           -self._span_y, self._span_y])
 
@@ -118,9 +127,9 @@ class Image(object):
         :return:  H x W x 3 (RGB)  image
         """
         # self._analyze_coords(coords,bounces)
-        #logging.info("Integer-interpolating on grid of coordinates:  %s" % (coords.shape,))
-        #logging.info("\tImage is shape:  %s" % (self._shape, ))
-        #logging.info("\tQuery spans x in [%.3f, %.3f] and y in [%.3f, %.3f]." % (
+        # logging.info("Integer-interpolating on grid of coordinates:  %s" % (coords.shape,))
+        # logging.info("\tImage is shape:  %s" % (self._shape, ))
+        # logging.info("\tQuery spans x in [%.3f, %.3f] and y in [%.3f, %.3f]." % (
         #    np.min(coords[:, :, 0]), np.max(coords[:, :, 0]),
         #    np.min(coords[:, :, 1]), np.max(coords[:, :, 1])))
 
@@ -141,7 +150,7 @@ class Image(object):
             channel_inds = px_coords_valid[0, :] * 0 + channel
             valid_pixels = self._img[(px_coords_valid[0, :], px_coords_valid[1, :], channel_inds)]
             output[valid, channel] = valid_pixels
-        #logging.info("\tInterpolation took %.6f seconds." % (time.time() - t_start))
+        # logging.info("\tInterpolation took %.6f seconds." % (time.time() - t_start))
         return output.reshape([out_shape[0], out_shape[1], 3])
 
     def set_image(self, image):

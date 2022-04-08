@@ -13,7 +13,7 @@ from threading import Lock
 import cv2
 from scipy.optimize import minimize
 
-from gui_utils.mouse import MouseState, ButtonStates, MouseButtons, ModKeys
+from gui_utils.mouse import MouseKeyboardState, ButtonStates, MouseButtons
 from gui_utils.text_annotation import get_best_font_scale
 
 
@@ -38,7 +38,7 @@ class MirrorPrism(ABC):
         self._mask = None
         self._shaping_finish_event = None
         self._shaping_window_name = None
-        self._mouse_state = MouseState()
+        self._mouse_state = MouseKeyboardState()
         self._mouse_pos_orig = None
         self._base_aperture_scale = None
 
@@ -55,7 +55,7 @@ class MirrorPrism(ABC):
         """
         self._shaping_window_name = window_name
         self._shaping_finish_event = finished_event
-        print("Start shaping:",self._shaping_finish_event, id(self) )
+        print("Start shaping:", self._shaping_finish_event, id(self))
         return self.SHAPING_INSTRUCTIONS, self.handle_mouse_adjust
 
     def _done_shaping(self):
@@ -66,12 +66,6 @@ class MirrorPrism(ABC):
         cv2.setMouseCallback(self._shaping_window_name, lambda *args: None)
         self._set_geometry()
 
-    def _set_geometry(self):
-        """
-        translate from the 2d-definition of the aperture to the 3d.
-        set distances for image plane, target plane (video), field of view, etc.
-        """
-
     def handle_mouse_adjust(self, *args, **kwargs):
         """
         CV2 callback for mouse events
@@ -81,7 +75,7 @@ class MirrorPrism(ABC):
         mouse_keyboard_state = self._mouse_state.update_state(*args, **kwargs)
 
         if mouse_keyboard_state['mouse_buttons'][MouseButtons.LEFT] is not None and \
-                mouse_keyboard_state['mod_keys'][ModKeys.SHIFT]:
+                mouse_keyboard_state['mod_keys']['shift']:
 
             if self._mouse_pos_orig is None:  # first time
                 self._mouse_pos_orig = mouse_keyboard_state['mouse_position']
@@ -99,7 +93,7 @@ class MirrorPrism(ABC):
             self._base_aperture_scale = None
             self._mouse_pos_orig = None
 
-        if not mouse_keyboard_state['mod_keys'][ModKeys.SHIFT]:
+        if not mouse_keyboard_state['mod_keys']['shift']:
             # shape sub-classes
             self._mouse_adjust(mouse_keyboard_state['mouse_position'],
                                mouse_keyboard_state['motion'],
@@ -114,6 +108,44 @@ class MirrorPrism(ABC):
         NOTE:  right-mouse click is used by this parent class.
         """
         pass
+
+    def _get_inscribed_rectangle(self, xy_resolution, margin=0.05):
+        """
+        Get largest rectangle fitting inside shape, leaving margin space.
+        :param xy_resolution:  width,height of rectangle
+        :returns x half-width, y-half width of rectangle
+        """
+        if xy_resolution[1] > xy_resolution[0]:
+            raise Exception("Portrait aspect ratios not implemented.")
+        verts = self.get_rel_shape(scale=self._aperture_scale)
+        xy_aspect = float(xy_resolution[0]) / float(xy_resolution[1])
+        img_scale = 1.0 / float(xy_resolution[1])
+        half_box_scale = img_scale * 2  # start 4 pixels wide
+        img = np.zeros((xy_resolution[1], xy_resolution[0], 3), dtype=np.uint8) + 1
+        masked = self.get_masked_image(img)
+        half_box_size = np.array([half_box_scale / xy_aspect, half_box_scale])
+        img_center = (np.array(xy_resolution) / 2.0).astype(np.int64)
+        final_half_box_size = None
+        while half_box_size[0] < xy_resolution[0] / 2 and half_box_size[1] < xy_resolution[1] / 2:
+            half_box_scale += img_scale
+            half_box_size = np.array([half_box_scale / xy_aspect , half_box_scale])
+            half_box_px = half_box_size / img_scale
+
+            b = np.int64(half_box_px)
+            print(half_box_size)
+            print(b)
+            edges = [masked[img_center[1] - b[1]: img_center[1] + b[1], img_center[0] - b[0], 0].reshape(-1),
+                     masked[img_center[1] - b[1]: img_center[1] + b[1], img_center[0] + b[0], 0].reshape(-1),
+                     masked[img_center[1] - b[1], img_center[0] - b[0]: img_center[0] + b[0], 0].reshape(-1),
+                     masked[img_center[1] + b[1], img_center[0] - b[0]: img_center[0] + b[0], 0].reshape(-1), ]
+            if np.sum(np.hstack(edges)) > 0:
+                half_box_scale-= img_scale
+                half_box_scale *= (1.0 - margin)
+                final_half_box_size = np.array([half_box_scale / xy_aspect , half_box_scale])
+                break
+        if final_half_box_size is None:
+            raise Exception("Couldn't fit rectangle in shape:  %s" % (verts, ))
+        return final_half_box_size
 
     def handle_keyboard_adjust(self, k):
         """
@@ -153,6 +185,7 @@ class MirrorPrism(ABC):
         maked = img * np.expand_dims(self._mask, 2)
         return maked
 
+    '''
     def _set_corners(self, corners, height, inscribed_radius=None):
         """
         NOTE:  Corners are shifted so inscribed circle center has x,y=0,0, if inscribed_radius is None.
@@ -192,7 +225,7 @@ class MirrorPrism(ABC):
                                             self._top_right[i, :],
                                             self._top_left[i, :]) for i in range(self._n)]
         self._normals = np.array(normals)
-
+    
     def get_height(self):
         return self._height
 
@@ -228,6 +261,7 @@ class MirrorPrism(ABC):
 
     def get_n(self):
         return self._n
+    '''
 
     @classmethod
     @abstractmethod
