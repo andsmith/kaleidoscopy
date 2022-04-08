@@ -1,6 +1,5 @@
 import numpy as np
 from mirrors import MirrorPrism
-import matplotlib.pyplot as plt
 from mirror_utils import transform_points
 from gui_utils.mouse import MouseButtons, ButtonStates
 
