@@ -5,11 +5,11 @@ Model of mirror geometry.  Mirrors are perpendicular to image plane and form a c
 
 from abc import ABC, abstractmethod
 import numpy as np
-from mpl_toolkits.mplot3d import Axes3D
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-import matplotlib.pyplot as plt
+#from mpl_toolkits.mplot3d import Axes3D
+#from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+#import matplotlib.pyplot as plt
 import logging
-from threading import Lock
+#from threading import Lock
 import cv2
 from scipy.optimize import minimize
 from pynput import keyboard

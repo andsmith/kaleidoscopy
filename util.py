@@ -5,7 +5,7 @@ import numpy as np
 import cv2
 from scipy.interpolate import griddata
 # import matplotlib.pylab as plt
-import matplotlib.cm as cm
+#import matplotlib.cm as cm
 #from mpl_toolkits.mplot3d import Axes3D
 #from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
