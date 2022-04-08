@@ -5,17 +5,19 @@ Model of mirror geometry.  Mirrors are perpendicular to image plane and form a c
 
 from abc import ABC, abstractmethod
 import numpy as np
-#from mpl_toolkits.mplot3d import Axes3D
-#from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-#import matplotlib.pyplot as plt
+# from mpl_toolkits.mplot3d import Axes3D
+# from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+# import matplotlib.pyplot as plt
 import logging
-#from threading import Lock
+# from threading import Lock
 import cv2
 from scipy.optimize import minimize
 from pynput import keyboard
 from gui_utils.mouse import MouseKeyboardState, ButtonStates, MouseButtons
 from gui_utils.text_annotation import get_best_font_scale
 import faulthandler
+
+
 
 class MirrorPrism(ABC):
     """
@@ -64,7 +66,7 @@ class MirrorPrism(ABC):
         logging.info("Finished event set...")
         self._shaping_finish_event = None
         cv2.setMouseCallback(self._shaping_window_name, lambda *args: None)
-        #self._set_geometry()
+        # self._set_geometry()
 
     def handle_mouse_adjust(self, *args, **kwargs):
         """
@@ -75,8 +77,7 @@ class MirrorPrism(ABC):
         mouse_keyboard_state = self._mouse_state.update_state(*args, **kwargs)
 
         if mouse_keyboard_state['mouse_buttons'][MouseButtons.LEFT] is not None and \
-                mouse_keyboard_state['mod_keys'][keyboard.Key.shift]:
-
+                mouse_keyboard_state['mod_keys']['shift']:
             if self._mouse_pos_orig is None:  # first time
                 self._mouse_pos_orig = mouse_keyboard_state['mouse_position']
                 self._base_aperture_scale = self._aperture_scale
@@ -93,7 +94,7 @@ class MirrorPrism(ABC):
             self._base_aperture_scale = None
             self._mouse_pos_orig = None
 
-        if not mouse_keyboard_state['mod_keys'][keyboard.Key.shift]:
+        if not mouse_keyboard_state['mod_keys']['shift']:
             # shape sub-classes
             self._mouse_adjust(mouse_keyboard_state['mouse_position'],
                                mouse_keyboard_state['motion'],
@@ -128,7 +129,7 @@ class MirrorPrism(ABC):
         final_half_box_size = None
         while half_box_size[0] < xy_resolution[0] / 2 and half_box_size[1] < xy_resolution[1] / 2:
             half_box_scale += img_scale
-            half_box_size = np.array([half_box_scale / xy_aspect , half_box_scale])
+            half_box_size = np.array([half_box_scale / xy_aspect, half_box_scale])
             half_box_px = half_box_size / img_scale
 
             b = np.int64(half_box_px)
@@ -139,12 +140,12 @@ class MirrorPrism(ABC):
                      masked[img_center[1] - b[1], img_center[0] - b[0]: img_center[0] + b[0], 0].reshape(-1),
                      masked[img_center[1] + b[1], img_center[0] - b[0]: img_center[0] + b[0], 0].reshape(-1), ]
             if np.sum(np.hstack(edges)) > 0:
-                half_box_scale-= img_scale
+                half_box_scale -= img_scale
                 half_box_scale *= (1.0 - margin)
-                final_half_box_size = np.array([half_box_scale / xy_aspect , half_box_scale])
+                final_half_box_size = np.array([half_box_scale / xy_aspect, half_box_scale])
                 break
         if final_half_box_size is None:
-            raise Exception("Couldn't fit rectangle in shape:  %s" % (verts, ))
+            raise Exception("Couldn't fit rectangle in shape:  %s" % (verts,))
         return final_half_box_size
 
     def handle_keyboard_adjust(self, k):
@@ -406,7 +407,9 @@ def plot_3d_polygon(corners, ax, color=(0.1, .15, 1.0, .5), **kwargs):
 
 
 if __name__ == "__main__":
-    import ipdb; ipdb.set_trace()
+    import ipdb;
+
+    ipdb.set_trace()
     faulthandler.enable()
     logging.basicConfig(level=logging.INFO)
     # test_ray_tracing()
