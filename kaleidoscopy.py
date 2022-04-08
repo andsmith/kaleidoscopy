@@ -95,9 +95,10 @@ class KScopyApp(object):
             print("App Shutdown - by exception")
             pass
 
-    def _update_k_map(self, data):
-        self._k_map = data['map']
-        self._render_stats = data['render_stats']
+    def _update_k_map(self, img_map, stats):
+        self._k_map = img_map
+        self._render_stats = "Ray-tracing:  %i of %i rays hit image in at most %i bounces." % (
+            stats['rays_hit'], stats['n_rays'], stats['n_bounces'])
 
     def _toggle_osd(self):
         self._OSD_on = not self._OSD_on
