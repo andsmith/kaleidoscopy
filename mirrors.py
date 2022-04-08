@@ -13,10 +13,8 @@ from threading import Lock
 import cv2
 from scipy.optimize import minimize
 
-from gui_utils.mouse import MouseState
+from gui_utils.mouse import MouseState, ButtonStates, MouseButtons, ModKeys
 from gui_utils.text_annotation import get_best_font_scale
-
-import keyboard
 
 
 class MirrorPrism(ABC):
@@ -44,7 +42,6 @@ class MirrorPrism(ABC):
         self._mouse_pos_orig = None
         self._base_aperture_scale = None
 
-
     @abstractmethod
     def get_rel_shape(self, scale=1.0, **kwargs):
         """
@@ -56,14 +53,15 @@ class MirrorPrism(ABC):
         """
         User sets shape of mirror arrangement.
         """
-        print("Start shaping:", finished_event)
         self._shaping_window_name = window_name
         self._shaping_finish_event = finished_event
+        print("Start shaping:",self._shaping_finish_event, id(self) )
         return self.SHAPING_INSTRUCTIONS, self.handle_mouse_adjust
 
     def _done_shaping(self):
-        print("Start shaping:", self._shaping_finish_event)
+        print("Stopping shaping:", self._shaping_finish_event, id(self))
         self._shaping_finish_event.set()
+        logging.info("Finished event set...")
         self._shaping_finish_event = None
         cv2.setMouseCallback(self._shaping_window_name, lambda *args: None)
 
@@ -73,16 +71,16 @@ class MirrorPrism(ABC):
           if "SHIFT" is down,  adjusts the aperture size,
           else  the other params are adjusted by the sub-class.
         """
-        position, motion, button_change, button_state = self._mouse_state.update_state(*args, **kwargs)
+        mouse_keyboard_state = self._mouse_state.update_state(*args, **kwargs)
 
-        if keyboard.is_pressed('shift'):
-            print(button_change)
+        if mouse_keyboard_state['mouse_buttons'][MouseButtons.LEFT] is not None and \
+                mouse_keyboard_state['mod_keys'][ModKeys.SHIFT]:
 
-            if button_change == 'l-down':
-                self._mouse_pos_orig = position
+            if self._mouse_pos_orig is None:  # first time
+                self._mouse_pos_orig = mouse_keyboard_state['mouse_position']
                 self._base_aperture_scale = self._aperture_scale
-            elif button_state[0] == 1:  # left-down
-                distance = (self._mouse_pos_orig[1] - position[1]) / 400.0
+            else:
+                distance = (self._mouse_pos_orig[1] - mouse_keyboard_state['mouse_position'][1]) / 400.0
                 self._aperture_scale = self._base_aperture_scale + distance
                 if self._aperture_scale < self._MIN_APERTURE_SCALE:
                     self._aperture_scale = self._MIN_APERTURE_SCALE
@@ -90,14 +88,20 @@ class MirrorPrism(ABC):
                     self._aperture_scale = 1.0
                 self._mask = None
 
-            elif button_change == 'l-up':
-                self._base_aperture_scale = None
-                self._mouse_pos_orig = None
-        else:
-            self._mouse_adjust(position, motion, button_change, button_state)
+        if mouse_keyboard_state['button_change'] == 'l-up':
+            self._base_aperture_scale = None
+            self._mouse_pos_orig = None
+
+        if not mouse_keyboard_state['mod_keys'][ModKeys.SHIFT]:
+            # shape sub-classes
+            self._mouse_adjust(mouse_keyboard_state['mouse_position'],
+                               mouse_keyboard_state['motion'],
+                               mouse_keyboard_state['button_change'],
+                               mouse_keyboard_state['mouse_buttons'],
+                               mouse_keyboard_state['mod_keys'])
 
     @abstractmethod
-    def _mouse_adjust(self, pos, d_pos, d_button, button_state):
+    def _mouse_adjust(self, pos, d_pos, d_button, button_state, keyboard_state):
         """
         Adjust shape-specific mirror params using mouse
         NOTE:  right-mouse click is used by this parent class.
@@ -112,7 +116,6 @@ class MirrorPrism(ABC):
         if k == 0:
             print("ENTER")
         if k == ord(' '):
-            print("SPACE")
             self._done_shaping()
 
     def _make_mask(self, res):

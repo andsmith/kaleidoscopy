@@ -21,7 +21,6 @@ from error_handling import ShutdownException
 import sys
 
 
-
 class KScopeState(Enum):
     setup = 0
     running = 1
@@ -82,7 +81,6 @@ class KScopyApp(object):
             self._status_bar = StatusMessages(image_shape, self._OSD_TEXT_COLOR,
                                               self._OSD_BKG_COLOR,
                                               bkg_alpha=self._OSD_ALPHA, spacing=10, max_font_scale=3.0)
-            print("XXX")
             self._user_shape_mirrors()
 
             print("Starting scope...")
@@ -101,10 +99,18 @@ class KScopyApp(object):
         print("Main._shutdown() done.")
 
     def _wait(self):
+        logging.info("Waiting...")
         self._waiter.clear()
         while self._state != KScopeState.shutdown:
-            self._waiter.wait(timeout=0.1)  # inelegant...
-
+            if self._waiter.wait(timeout=0.1):
+                break
+            """
+            w= self._waiter.wait(timeout=0.1)
+            print(w)
+            if w:  # inelegant...
+                break
+            """
+        logging.info("Done waiting.")
         if self._state == KScopeState.shutdown:
             raise ShutdownException("App shut down during wait.")
 
@@ -118,15 +124,18 @@ class KScopyApp(object):
         self._status_bar.clear()
         self._status_bar.add_msgs(shaping_instructions, duration_sec=0)
 
-        self._wait()
+        self._wait()  # clears wait after user accepts?
+        logging.info("Done waiting for shaping")
+        # clear callback
+        cv2.setMouseCallback(self._window_name, lambda *args: None)
 
     def _user_pick_shape(self):
         """
         User selects type of mirror arrangement.
         """
         icons = [prism_type.get_icon(self._icon_size) for prism_type in KScopyApp.MIRROR_TYPES]
-        if len(icons)==4:
-            icons = [icons[:2],icons[2:]]
+        if len(icons) == 4:
+            icons = [icons[:2], icons[2:]]
         #  Need good way to arange these...
         choice_ind = ChooseItemDialog(prompt="Select mirror Geometry:").ask_icons(icons)
         return KScopyApp.MIRROR_TYPES[choice_ind]
@@ -226,6 +235,7 @@ class KScopyApp(object):
     def _handle_hotkeys(self, k):
         pass
 
+
 def thread_monitor():
     start = time.time()
     while start + 5.0 > time.time():
@@ -236,8 +246,8 @@ def thread_monitor():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    #t1 = Thread(target=thread_monitor)
-    #t1.start()
+    # t1 = Thread(target=thread_monitor)
+    # t1.start()
     scope = KScopyApp()
     # _test_kscope_diagrams()
     # scope.view_live(0)

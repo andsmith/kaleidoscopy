@@ -1,6 +1,8 @@
 import numpy as np
 from mirrors import MirrorPrism
 import matplotlib.pyplot as plt
+from mirror_utils import transform_points
+from gui_utils.mouse import MouseButtons, ButtonStates, ModKeys
 
 
 class NGonPrism(MirrorPrism):
@@ -11,31 +13,30 @@ class NGonPrism(MirrorPrism):
         self._phi = 0.0
         self._button_first_pressed_pos = None
         self._base_n = 0
-        self._base_phi=0
+        self._base_phi = 0
         super(NGonPrism, self).__init__()
 
     @classmethod
     def get_name(cls):
         return " n-polygon "
 
-    def get_rel_shape(self, margin=0.05):
+    def get_rel_shape(self, scale=1.0, **kwargs):
         """
-        Get coordinates of vertices of current shape, best fit into the unit square.
-        leave "margin" around border.
+        Get coordinates of vertices of current shape, fit into the unit square.
         """
         theta = np.linspace(self._phi, np.pi * 2 + self._phi, self._n, endpoint=False)
-        points = np.array([(np.cos(t), np.sin(t)) for t in theta])
-        points *= (0.5 - margin / 2.0)
-        points = points + 0.5
+        points = np.array([(np.cos(t), np.sin(t)) for t in theta]) * 0.5 + np.array([0.5, 0.5]).reshape(1,2)
+        points = transform_points(unit_points=points, scale=scale, center=np.array([0.5, 0.5]))
+
         return points
 
-    def _mouse_adjust(self, pos, d_pos, d_button, button_state):
+    def _mouse_adjust(self, pos, d_pos, d_button, button_state, keyboard_state):
 
         if d_button == 'l-up':
             self._base_n = self._n
             self._base_phi = self._phi
 
-        elif button_state[0] == 1:
+        if button_state[MouseButtons.LEFT] == ButtonStates.DOWN:
             if self._button_first_pressed_pos is None:
                 self._button_first_pressed_pos = pos
                 self._base_n = self._n
@@ -53,8 +54,8 @@ class NGonPrism(MirrorPrism):
 
                 # change phi
                 change = self._button_first_pressed_pos[0] - pos[0]
-                if change!=0:
-                    self._phi = self._base_phi + np.deg2rad(change/2.0)
+                if change != 0:
+                    self._phi = self._base_phi + np.deg2rad(change / 2.0)
                     self._mask = None
         else:
             self._button_first_pressed_pos = None

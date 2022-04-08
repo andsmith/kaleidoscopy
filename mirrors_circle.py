@@ -1,5 +1,6 @@
 import numpy as np
 from mirrors import MirrorPrism
+from mirror_utils import transform_points
 
 
 class CirclePrism(MirrorPrism):
@@ -10,10 +11,9 @@ class CirclePrism(MirrorPrism):
 
     SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS
 
-    def get_rel_shape(self, scale=1.0, n_approx=10000):
+    def get_rel_shape(self, scale=1.0, n_approx=1000, **kwargs):
         """
-        Get coordinates of vertices of current shape, best fit into the unit square.
-        leave "margin" around border.
+        Get coordinates of vertices of current shape,  fit into the unit square.
 
         # since elliptical, will be approximate
         """
@@ -22,9 +22,11 @@ class CirclePrism(MirrorPrism):
         center = np.array([0.5, 0.4]).reshape(1, 2)
         points = np.hstack([(np.cos(t) * r).reshape(-1,1),
                             (np.sin(t) * r).reshape(-1,1)]) + center
+        points = transform_points(unit_points=points, scale=scale, center = np.array([0.5,0.5]))
+
         return points
 
-    def _mouse_adjust(self, pos, d_pos, d_button, button_state):
+    def _mouse_adjust(self, pos, d_pos, d_button, button_state,keyboard_state):
         return
 
     @classmethod

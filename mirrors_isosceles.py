@@ -1,7 +1,7 @@
 import numpy as np
 from mirrors import MirrorPrism
-from mirror_utils import center_and_scale_points
-
+from mirror_utils import transform_points
+from gui_utils.mouse import MouseButtons, ButtonStates, ModKeys
 
 class IsoscelesPrism(MirrorPrism):
     def __init__(self):
@@ -14,17 +14,16 @@ class IsoscelesPrism(MirrorPrism):
     SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS + \
                            [' Left-click + Drag up-and-down:  Vertex angle"']
 
-    def get_rel_shape(self, scale=1.0):
+    def get_rel_shape(self, scale=1.0, **kwargs):
         """
-        Get coordinates of vertices of current shape, best fit into the unit square.
+        Get coordinates of vertices of current shape,  fit into the unit square.
         """
         top = (0.5, 1.0)
         bottom_left = (0.5 - np.sin(self._theta / 2.0), 1.0 - np.cos(self._theta / 2.0))
         bottom_right = (0.5 + np.sin(self._theta / 2.0), 1.0 - np.cos(self._theta / 2.0))
         points = np.array([top, bottom_left, bottom_right])
-        center = (np.max(points, axis=0) + np.min(points, axis=0)) / 2.0
 
-        points = center_and_scale_points(points, scale, center)
+        points = transform_points(unit_points=points, scale=scale, center = np.array([0.5,0.5]))
 
         return points
 
@@ -36,8 +35,9 @@ class IsoscelesPrism(MirrorPrism):
         corners = np.array(corners + corners[0])
         super(IsoscelesPrism, self)._set_corners(corners=corners, **kwargs)
 
-    def _mouse_adjust(self, pos, d_pos, d_button, button_state):
-        if button_state[0] == 1:
+    def _mouse_adjust(self, pos, d_pos, d_button, button_state, keyboard_state):
+
+        if button_state[MouseButtons.LEFT] == ButtonStates.DOWN:
             if d_pos is not None:
                 change = d_pos[1] / 400.0
                 if change != 0:
