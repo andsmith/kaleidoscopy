@@ -73,6 +73,7 @@ class KScopyApp(object):
                 self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=False)
 
             # User chooses type of scope
+            self._ray_tracer = None
             self._mirror_type = self._user_pick_shape()
             self._mirrors = self._mirror_type()
             self._cam.start()
