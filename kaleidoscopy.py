@@ -31,8 +31,6 @@ class KScopeState(Enum):
 
 class KScopyApp(object):
     MIRROR_TYPES = PRISMS
-    RUNNING_MESSAGES = ["SPACE - toggle this on-screen display."
-                        "Q - quit"]
     _OSD_TEXT_COLOR = (255, 254, 250)
     _OSD_BKG_COLOR = (118, 100, 90)
     _OSD_ALPHA = 0.65
@@ -51,6 +49,12 @@ class KScopyApp(object):
         self._app_flow_lock = Lock()
         self._waiter = Event()
         self._OSD_on = True
+
+        self._hotkeys = [{'key': ' ', 'desc': 'Help', 'func': self._toggle_osd,
+                          'txt': "SPACE - toggle this on-screen display."},
+
+                         {'key': 'q', 'desc': 'Quit', 'func': self._shutdown,
+                          'txt': "Q - Quit."}]
 
         self._fps = {'n_in': 0,
                      'n_out': 0,
@@ -81,7 +85,6 @@ class KScopyApp(object):
                                               self._OSD_BKG_COLOR,
                                               bkg_alpha=self._OSD_ALPHA, spacing=10, max_font_scale=1.0)
             self._user_shape_mirrors()
-
             self._run()
 
 
@@ -91,13 +94,16 @@ class KScopyApp(object):
 
         print("MAIN_APP END")
 
+    def _toggle_osd(self):
+        self._OSD_on = not self._OSD_on
+
     def _run(self):
         print("Starting scope...")
         self._state = KScopeState.running
 
         # set main help-text
         self._status_bar.clear()
-        self._status_bar.add_msgs(self.RUNNING_MESSAGES, "Help")
+        self._status_bar.add_msgs([k['txt'] for k in self._hotkeys], "Help")
 
     def _shutdown(self):
         self._state = KScopeState.shutdown
@@ -111,12 +117,6 @@ class KScopyApp(object):
         while self._state != KScopeState.shutdown:
             if self._waiter.wait(timeout=0.1):
                 break
-            """
-            w= self._waiter.wait(timeout=0.1)
-            print(w)
-            if w:  # inelegant...
-                break
-            """
         logging.info("Done waiting.")
         if self._state == KScopeState.shutdown:
             raise ShutdownException("App shut down during wait.")
@@ -141,9 +141,8 @@ class KScopyApp(object):
         User selects type of mirror arrangement.
         """
         icons = [prism_type.get_icon(self._icon_size) for prism_type in KScopyApp.MIRROR_TYPES]
-        if len(icons) == 4:
+        if len(icons) == 4:  # Need good way to arrange these automatically...
             icons = [icons[:2], icons[2:]]
-        #  Need good way to arange these...
         choice_ind = ChooseItemDialog(prompt="Select mirror Geometry:").ask_icons(icons)
         return KScopyApp.MIRROR_TYPES[choice_ind]
 
@@ -193,16 +192,14 @@ class KScopyApp(object):
         self._fps['n_out'] += 1
 
         # KEYBOARD
-        if k == ord('q'):
-            print("q-Quit in main.")
-            self._shutdown()
 
-            print("Shutdown complete.")
+        if ord('q') == k & 0xff:
+            self._shutdown()  # catch-all
 
-            return
-
-        elif self._state == KScopeState.running:
-            self._handle_hotkeys(k)
+        if self._state == KScopeState.running:
+            for key in self._hotkeys:
+                if ord(key['key']) == k & 0xff:
+                    key['func']()
 
         elif self._state == KScopeState.shaping:
             self._mirrors.handle_keyboard_adjust(k)
@@ -231,15 +228,12 @@ class KScopyApp(object):
             self._fps['n_dropped'] = 0
 
             self._status_bar.add_msg("FPS:  in = %.3f,  out = %.3f,  drop = %i" % (
-                                                                  self._fps['fps_in'], self._fps['fps_out'],
-                                                                  self._fps['fps_drop']), "fps")
+                self._fps['fps_in'], self._fps['fps_out'],
+                self._fps['fps_drop']), "fps")
             self._fps['last_update_time'] = time.time()
 
     def _get_raytracing_status(self):
         return "(ray-tracing status goes here)"
-
-    def _handle_hotkeys(self, k):
-        pass
 
 
 def thread_monitor():
