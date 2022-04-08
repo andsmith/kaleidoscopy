@@ -5,20 +5,14 @@ import logging
 import time
 from util import make_bounds, TextManager, Image
 from threading import Lock, Event, enumerate, get_ident, Thread
-from ray_tracing import RayBundle, MirrorTube
+from ray_tracing import RayBundle, MirrorTube, RayTracer
 from prisms import NGonPrism, IsoscelesPrism, RectangularPrism, CirclePrism, PRISMS
 from enum import Enum
-import matplotlib.cm as cm
-from mpl_toolkits.mplot3d import Axes3D
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-import matplotlib.gridspec as gridspec
-from gui_utils.camera_settings import count_cameras, user_pick_resolution
 from gui_utils.gui_picker import ChooseItemDialog
 from gui_utils.camera import Camera, pick_camera
 from gui_utils.text_annotation import StatusMessages
 from error_handling import ShutdownException
-
-import sys
+from rendering import ImageMapper
 
 
 class KScopeState(Enum):
@@ -37,7 +31,6 @@ class KScopyApp(object):
     _FPS_PERIOD_SEC = 2.0
 
     def __init__(self):
-        # state vars
         self._in_frame = None
         self._in_frame_time = None
         self._out_frame = None
@@ -49,6 +42,9 @@ class KScopyApp(object):
         self._app_flow_lock = Lock()
         self._waiter = Event()
         self._OSD_on = True
+        self._k_map = None  # stores current input-output mapping of pixels
+        self._render_stats = None
+        self._raytracing_stats = None
 
         self._hotkeys = [{'key': ' ', 'desc': 'Help', 'func': self._toggle_osd,
                           'txt': "SPACE - toggle this on-screen display."},
@@ -76,6 +72,7 @@ class KScopyApp(object):
                 self._cam_ind = 0
                 self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=False)
 
+            # User chooses type of scope
             self._mirror_type = self._user_pick_shape()
             self._mirrors = self._mirror_type()
             self._cam.start()
@@ -84,31 +81,44 @@ class KScopyApp(object):
             self._status_bar = StatusMessages(image_shape, self._OSD_TEXT_COLOR,
                                               self._OSD_BKG_COLOR,
                                               bkg_alpha=self._OSD_ALPHA, spacing=10, max_font_scale=1.0)
-            self._user_shape_mirrors()
-            self._run()
+            self._renderer = ImageMapper(self._resolution)
 
+            # User shapes mirror parameters
+            self._user_shape_mirrors()
+            self._ray_tracer = RayTracer(self._mirrors, self._resolution, self._update_k_map)
+
+            # Start raytracing and rendering
+            self._start()
 
         except ShutdownException:
             print("App Shutdown - by exception")
             pass
 
-        print("MAIN_APP END")
+    def _update_k_map(self, data):
+        self._k_map = data['map']
+        self._render_stats = data['render_stats']
 
     def _toggle_osd(self):
         self._OSD_on = not self._OSD_on
 
-    def _run(self):
+    def _start(self):
         print("Starting scope...")
         self._state = KScopeState.running
 
         # set main help-text
         self._status_bar.clear()
-        self._status_bar.add_msgs([k['txt'] for k in self._hotkeys], "Help")
+        self._status_bar.add_msgs([k['txt'] for k in self._hotkeys], "Help", duration_sec=0)
+
+        # begin
+        self._ray_tracer.start()
+
 
     def _shutdown(self):
         self._state = KScopeState.shutdown
         cv2.destroyAllWindows()
         self._cam.shutdown()
+        if self._ray_tracer is not None:
+            self._ray_tracer.shutdown()
         print("Main._shutdown() done.")
 
     def _wait(self):
@@ -173,7 +183,7 @@ class KScopyApp(object):
             self._status_bar.annotate_img(out_frame)
 
         elif self._state == KScopeState.running:
-            out_frame = in_frame.copy()  # render placeholder
+            out_frame = self._render(in_frame)
             self._update_osd_info()
             if self._OSD_on:
                 self._status_bar.annotate_img(out_frame)
@@ -209,6 +219,11 @@ class KScopyApp(object):
             cv2.setMouseCallback(self._window_name, self._pending_mouse_callback)
             self._pending_mouse_callback = None
 
+    def _render(self, frame):
+        if self._k_map is None:
+            self._ray_tracer.get_current_map()
+        return frame.copy()
+
     def _update_osd_info(self):
         """
             On-screen display components:
@@ -232,8 +247,13 @@ class KScopyApp(object):
                 self._fps['fps_drop']), "fps")
             self._fps['last_update_time'] = time.time()
 
-    def _get_raytracing_status(self):
-        return "(ray-tracing status goes here)"
+        if self._raytracing_stats is not None:
+            self._status_bar.add_msg(self._raytracing_stats, "raytracing_stats", duration_sec=5.0)
+
+        if self._render_stats is not None:
+            self._status_bar.add_msg(self._render_stats, "render_stats")
+        else:
+            self._status_bar.remove_msg('render_stats')
 
 
 def thread_monitor():

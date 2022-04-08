@@ -64,6 +64,13 @@ class MirrorPrism(ABC):
         logging.info("Finished event set...")
         self._shaping_finish_event = None
         cv2.setMouseCallback(self._shaping_window_name, lambda *args: None)
+        self._set_geometry()
+
+    def _set_geometry(self):
+        """
+        translate from the 2d-definition of the aperture to the 3d.
+        set distances for image plane, target plane (video), field of view, etc.
+        """
 
     def handle_mouse_adjust(self, *args, **kwargs):
         """

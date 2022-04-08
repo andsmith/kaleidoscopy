@@ -9,6 +9,30 @@ from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from util import make_bounds, pct_str, Image
 from skimage.morphology import skeletonize
+from threading import Thread, Lock
+
+
+class RayTracer(object):
+    def __init__(self, mirrors, resolution, update_callback):
+        self._img_shape = resolution[1], resolution[0]
+        self._mirrors = mirrors
+        self._callback = update_callback
+        self._render_thread = Thread(target=self._render)
+        self._map = None
+        self._shutdown = False
+
+    def _render(self):
+        while not self._shutdown:
+            time.sleep(1)
+
+    def start(self):
+        self._render_thread.start()
+
+    def get_current_map(self):
+        return self._map
+
+    def shutdown(self):
+        self._shutdown = True
 
 
 class RayBundle(object):
@@ -243,10 +267,6 @@ class RayBundle(object):
             plt.plot(line_x0, line_y0, line_z0, 'k-', alpha=.5, **kwargs)
             handle = ax.plot(line_x, line_y, line_z, 'k-', **kwargs)
         return handle
-
-
-
-
 
 
 class MirrorTube(object):
