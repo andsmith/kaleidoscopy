@@ -1,15 +1,5 @@
-from abc import ABC, abstractmethod
-
-import numpy as np
-import cv2
-import logging
 import time
-import matplotlib.pylab as plt
-from mpl_toolkits.mplot3d import Axes3D
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from util import make_bounds, pct_str, Image
-from skimage.morphology import skeletonize
-from threading import Thread, Lock
+from threading import Thread
 
 
 class RayTracer(object):
@@ -35,6 +25,7 @@ class RayTracer(object):
         self._shutdown = True
 
 
+'''
 class RayBundle(object):
     """
     Represents a grid of rays, update as they reflect, etc.
@@ -584,3 +575,4 @@ if __name__ == "__main__":
     pic = NGonPrism.get_icon(400)
     plt.imshow(pic[:, :, ::-1])
     plt.show()
+'''
