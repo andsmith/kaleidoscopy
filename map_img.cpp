@@ -6,9 +6,15 @@
 //
 #include <stdio.h>
 #include <stdlib.h>
-#include <numpy\ndarraytypes.h>
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__)
+#include "numpy\ndarraytypes.h"  // is this correct?
 #include <numpy\ndarrayobject.h>
 #include "numpy\arrayobject.h"
+#else
+#include "numpy/ndarraytypes.h"
+#include <numpy/ndarrayobject.h>
+#include "numpy/arrayobject.h"
+#endif
 
 #include "map_img.h"
 void map_img(void *image_src_v,
@@ -45,7 +51,7 @@ void map_img(void *image_src_v,
 
         }
     }
-    free(buf);
+
     puts("Done.\n");
     /**/
 }
@@ -78,7 +84,7 @@ void print_arr( char*arr, int n_cols, int n_rows, int print_cols, int print_rows
     }
     buf[0]=0;
     puts(buf);
-    free(buf);
+
 }
 int main(int argc, char*argv[]){
     int i,j;
