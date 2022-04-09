@@ -12,6 +12,8 @@
 #endif
 
 
+void print_arr( int*arr, int n_cols, int n_rows, int print_cols, int print_rows);
+void print_arr( char*arr, int n_cols, int n_rows, int print_cols, int print_rows);
 
 #ifdef __cplusplus
 extern "C" {

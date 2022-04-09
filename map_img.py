@@ -35,18 +35,19 @@ image_map = _load_algorithm('map_img')
 
 
 def test_img_map():
-    img = np.arange(20).astype(np.uint64).reshape(4, 5)
-
-    img_map = np.random.randint(0, img.size, img.size)
+    img = 20-np.arange(20).astype(np.uint8).reshape(4, 5)
+    img_map = (img * 0).astype(np.uint32)
+    img_map[0, :3] = np.array([2, 4, 7])
     dest = img * 0
 
     image_map(img_src=img, img_dest=dest, img_map=img_map)
-    import pprint
-    pprint.pprint(img)
-    print("")
-    pprint.pprint(img_map)
-    print("")
 
+    import pprint
+    print("Original:")
+    pprint.pprint(img)
+    print("Map:")
+    pprint.pprint(img_map)
+    print("Result:")
     pprint.pprint(dest)
 
 
