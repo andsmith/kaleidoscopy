@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import ctypes
 import os
-
+import time
 
 def is_windows():
     return os.name == 'nt'
@@ -33,6 +33,17 @@ def _load_algorithm(name):
 # for numpy extension
 image_map = _load_algorithm('map_img')
 
+def test_img_map_speed(res=(480,640),n_iter=1000):
+    n_px = np.prod(res)
+    img = np.random.randint(0,254,n_px,dtype=np.uint8).reshape(res)
+    dest = img*0
+    mapping =  np.random.randint(0,n_px,n_px,dtype=np.int64).reshape(res)
+
+    t_start=time.perf_counter()
+    for _ in range(n_iter):
+        image_map(img_src=img,img_dest=dest,img_map=mapping)
+    t_elapsed = time.perf_counter()-t_start
+    print("Time:  %.4f,  %5fms / mapping" % (t_elapsed, t_elapsed/n_iter*1000.0))
 
 def test_img_map():
     img = 20-np.arange(20).astype(np.uint8).reshape(4, 5)
@@ -54,4 +65,4 @@ def test_img_map():
 
 
 if __name__ == "__main__":
-    test_img_map()
+    test_img_map_speed(res=(1080,1920),n_iter=1000)
