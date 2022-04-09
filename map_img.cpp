@@ -1,9 +1,10 @@
 /*
  *
- * build:  gcc -O3 --shared --std:c11 map_img.c -o map_img.so
  * windows build:  cl /I C:\Python39\lib\site-packages\numpy\core\include /LD /DBUILD_MAPIMG_LIBRARY /I C:\Python39\include map_img.cpp /link /LIBPATH:C:\Python39\Libs\
  */
 //
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
+
 #include <stdio.h>
 #include <stdlib.h>
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__NT__)
@@ -24,9 +25,9 @@ void map_img(void *image_src_v,
              int col_count)
 {
     int r,c, index, src_index,src_index_p1;
-    char *image_src= (char*)image_src_v;
-    char *image_dest= (char*)image_dest_v;
-    int *image_map = (int*)image_map_v;
+    unsigned char *image_src= (unsigned char*)image_src_v;
+    unsigned char *image_dest= (unsigned char*)image_dest_v;
+    unsigned int *image_map = (unsigned int*)image_map_v;
     char buf[1024];
     //print_arr(image_dest, row_count,col_count, row_count,col_count);
 
@@ -58,7 +59,7 @@ void map_img(void *image_src_v,
 
 
 
-void print_arr( char*arr, int n_cols, int n_rows, int print_cols, int print_rows){
+void print_arr(unsigned char*arr, int n_cols, int n_rows, int print_cols, int print_rows){
     // Print an array, or the upper left corner of one.
 
     int n_char, i,width = 9;  // chars per number
@@ -86,12 +87,28 @@ void print_arr( char*arr, int n_cols, int n_rows, int print_cols, int print_rows
     puts(buf);
 
 }
+
+int test(){
+puts("Test!");
+return 0;
+}
+
 int main(int argc, char*argv[]){
-    int i,j;
+    int i;
     int w=5,h=4;
-    int *mapping = (int*)PyMem_Malloc(sizeof(int)*w*h);
-    char *dest = (char*)PyMem_Malloc(sizeof(char)*w*h);
-    char *img = (char*)PyMem_Malloc(sizeof(char)*w*h);
+    unsigned int *mapping;
+    unsigned char *dest;
+    unsigned char *img;
+
+
+
+    test();
+
+    mapping = (unsigned int*)malloc(sizeof(int)*w*h);
+    dest = (unsigned char*)malloc(sizeof(char)*w*h);
+    img = (unsigned char*)malloc(sizeof(char)*w*h);
+
+
     for (i=0;i<w*h;i++){
         img[i] = 20-i;
         dest[i]=0;

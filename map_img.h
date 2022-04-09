@@ -1,4 +1,5 @@
 #pragma once
+
 #ifdef _WIN32
     #ifdef BUILD_MAPIMG_LIBRARY
         #pragma message("Defined!")
@@ -11,9 +12,10 @@
     #define EXPORT_SYMBOL
 #endif
 
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 
 void print_arr( int*arr, int n_cols, int n_rows, int print_cols, int print_rows);
-void print_arr( char*arr, int n_cols, int n_rows, int print_cols, int print_rows);
+void print_arr( unsigned char*arr, int n_cols, int n_rows, int print_cols, int print_rows);
 
 #ifdef __cplusplus
 extern "C" {
