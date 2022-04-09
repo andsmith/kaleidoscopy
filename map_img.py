@@ -40,7 +40,9 @@ def test_img_map():
     img_map[0, :3] = np.array([2, 4, 7])
     dest = img * 0
 
+    print("img:  %s, map:  %s,  dest:  %s" % (img.dtype, img_map.dtype, dest.dtype))
     image_map(img_src=img, img_dest=dest, img_map=img_map)
+    print("img:  %s, map:  %s,  dest:  %s" % (img.dtype, img_map.dtype, dest.dtype))
 
     import pprint
     print("Original:")

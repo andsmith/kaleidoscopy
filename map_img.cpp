@@ -24,40 +24,54 @@ void map_img(void *image_src_v,
              int row_count,
              int col_count)
 {
-    int r,c, index, src_index,src_index_p1;
+    int r,c, index, src_index;
     unsigned char *image_src= (unsigned char*)image_src_v;
     unsigned char *image_dest= (unsigned char*)image_dest_v;
-    unsigned int *image_map = (unsigned int*)image_map_v;
-    char buf[1024];
-    //print_arr(image_dest, row_count,col_count, row_count,col_count);
-
-    image_dest[0]=1;
-            puts("bstartinguf");
-
-
-    //sprintf(buf, "rc:  %i, cc:  %i\n", row_count, col_count);
-    //puts(buf);
-    for (r=0;r<2;r++){
-        for (c=0;c<2;c++){
-            //image_dest[i] = image_src[image_map[i]]
-            index = r * col_count + c;
+     int *image_map = ( int*)image_map_v;
+     for (r=0;r<row_count;r++){
+         for (c=0;c<col_count;c++){
+            index = r*col_count + c;
             src_index = image_map[index];
-
-            src_index_p1 = src_index==(row_count*col_count-1)?0:src_index;
             image_dest[index] = image_src[src_index];
-            sprintf(buf,"r: %i, c: %i, index: %i, sv:  %i, val %i, val+1 %i\n",r,c,index, src_index, image_src[src_index],
-              image_src[src_index_p1]);
-            puts(buf);
-            print_arr(image_dest, row_count,col_count, row_count,col_count);
+          }
+      }
 
-        }
-    }
 
-    puts("Done.\n");
-    /**/
+       return;
 }
 
 
+
+
+int main(int argc, char*argv[]){
+//Test case should match one in map_img.py
+    int i;
+    int w=5,h=4;
+     int *mapping;
+    unsigned char *dest;
+    unsigned char *img;
+
+    mapping = ( int*)malloc(sizeof(int)*w*h);
+    dest = (unsigned char*)malloc(sizeof(char)*w*h);
+    img = (unsigned char*)malloc(sizeof(char)*w*h);
+
+
+    for (i=0;i<w*h;i++){
+        img[i] = 20-i;
+        dest[i]=0;
+        mapping[i] = 0;
+        }
+    mapping[0]=2;
+    mapping[1]=4;
+    mapping[2]=7;
+
+    print_arr(img, h,w,h,w);
+    //print_arr(mapping, h,w,h,w);
+    map_img(img, dest, mapping, h, w);
+    print_arr(dest, h,w,h,w);
+
+    return 0;
+}
 
 void print_arr(unsigned char*arr, int n_cols, int n_rows, int print_cols, int print_rows){
     // Print an array, or the upper left corner of one.
@@ -86,42 +100,4 @@ void print_arr(unsigned char*arr, int n_cols, int n_rows, int print_cols, int pr
     buf[0]=0;
     puts(buf);
 
-}
-
-int test(){
-puts("Test!");
-return 0;
-}
-
-int main(int argc, char*argv[]){
-    int i;
-    int w=5,h=4;
-    unsigned int *mapping;
-    unsigned char *dest;
-    unsigned char *img;
-
-
-
-    test();
-
-    mapping = (unsigned int*)malloc(sizeof(int)*w*h);
-    dest = (unsigned char*)malloc(sizeof(char)*w*h);
-    img = (unsigned char*)malloc(sizeof(char)*w*h);
-
-
-    for (i=0;i<w*h;i++){
-        img[i] = 20-i;
-        dest[i]=0;
-        mapping[i] = 0;
-        }
-    mapping[0]=2;
-    mapping[1]=4;
-    mapping[2]=7;
-
-    print_arr(img, h,w,h,w);
-    //print_arr(mapping, h,w,h,w);
-    map_img(img, dest, mapping, h, w);
-    print_arr(dest, h,w,h,w);
-
-    return 0;
 }
