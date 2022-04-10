@@ -56,8 +56,7 @@ class RayTracer(object):
         self._set_geometry()
         self._rays = RayBundle(shape=self._img_shape,
                                origin=(0.0, 0.0, 0.0),
-                               image_plane_xy_span=self._2d_window,
-                               image_plane_depth=self._image_plane_z)
+                               image_plane_xy_span=self._2d_window)
 
         while not self._shutdown and self._rays.get_active_rays().size > 0:
             self._bounce()  # advance rays to next surface, accumulate results
@@ -135,7 +134,7 @@ class RayBundle(object):
     Preserve array shape using mask.
     """
 
-    def __init__(self, shape, image_plane_xy_span,, origin=None, init_active=True):
+    def __init__(self, shape, image_plane_xy_span, origin=None, init_active=True):
         """
         initialize with explicit rays
         :param ray_origins:  H x W x 3 array, x, y, z coords of ray origin points
