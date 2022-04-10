@@ -1,22 +1,38 @@
 import time
 from multiprocessing import cpu_count, Pool
-from threading import Thread
+from threading import Thread, Lock
 import logging
 import numpy as np
 
 
 class RayTracer(object):
-    def __init__(self, mirrors, resolution, update_callback, n_cores=0):
+    _NO_HIT_Z = -1.0  # real hits are positive (?)
+
+    def __init__(self, mirrors, resolution, target_xy_span, target_resolution, update_callback, n_cores=0,
+                 fov_deg_x=30.0):
         self._n_cores = n_cores if n_cores > 0 else cpu_count() - 1  # save one for rendering?
         logging.info("Ray-tracer created running with %i cores." % (self._n_cores,))
+        self._fov = np.deg2rad(fov_deg_x)
         self._n_bounce = 0
+        self._target_xy_span = np.array(target_xy_span)
+        self._target_resolution = np.array(target_resolution)
+        self._target_xy_scale = self._target_xy_span / self._target_resolution
+
+        logging.info("_target_xy_span:  %s" % (self._target_xy_span,))
+        logging.info("_target_resolution:  %s" % (self._target_resolution,))
+        logging.info("_target_xy_scale:  %s" % (self._target_xy_scale,))
+        self._update_result_lock = Lock()
         self._shutdown = False
         self._rays = None
+        self._aspect = float(resolution[0]) / float(resolution[1])
         self._geom = {}
         self._stats = {'rays_hit': None,
                        'n_rays': None,
                        'n_bounces': None}
         self._img_shape = resolution[1], resolution[0]
+
+        self._bounce_counts = np.zeros(self._img_shape, dtype=np.int64)
+        self._hit_xyz_coords = np.zeros((self._img_shape[0], self._img_shape[1], 3), dtype=np.float64) - 1.0
         self._mirrors = mirrors
         self._callback = update_callback
         self._render_thread = Thread(target=self._render)
@@ -28,168 +44,109 @@ class RayTracer(object):
         self._set_geometry()
         self._rays = RayBundle(shape=self._img_shape,
                                origin=(0.0, 0.0, 0.0),
-                               x_span=self._geom['x_span'],
-                               y_span=self._geom['y_span'])
+                               image_plane_xy_span=self._2d_window,
+                               image_plane_depth=self._image_plane_z)
 
-        while not self._shutdown and RayTracer.count_rays(self._rays.get_active_rays()):
-            self._bounce()
-            self._make_new_map()
-            self._update_stats()
+        while not self._shutdown and self._rays.get_active_rays().size>0:
+            self._bounce()  # advance rays to next surface, accumulate results
+            with self._update_result_lock:
+                self._make_new_map()
+                self._update_stats()
             self._callback(self._map)
             time.sleep(1)
+
         logging.info("Ray tracing complete.")
 
-    def _bounce(self):
-        self._n_bounce += 1
+    def _xy_to_target_pixels(self, xy_coords):
+        rescaled = xy_coords * self._target_xy_scale.reshape(1, -1)
+        return rescaled
 
-    def _make_new_map:
+    def _make_new_map(self):
+        where_hits = np.where(self._hit_xyz_coords[:, :, 2] != self._NO_HIT_Z)
+        hits_xyz = self._hit_xyz_coords[where_hits]
+        hits_i = hits_xyz[0]
+        hits_j = hits_xyz[1]
+
+        x_scaled = self._hit_xyz_coords[hits_i, 0] * self._target_xy_scale[0] + (self._img_shape[1] / 2.0)
+        y_scaled = self._hit_xyz_coords[hits_j, 1] * self._target_xy_scale[1] + (self._img_shape[0] / 2.0)
+
+        valid = np.logical_and(np.logical_and(x_scaled >= 0, x_scaled < self._img_shape[1]),
+                               np.logical_and(y_scaled >= 0, y_scaled < self._img_shape[0]), )
+        invalid = np.logical_not(valid)
+        hits_i = hits_i[valid]
+        hits_j = hits_j[valid]
+        x_scaled = np.int64(x_scaled)
+        y_scaled = np.ing64(y_scaled)
+        xy_scaled = x_scaled + y_scaled * self._img_shape[0]
+        mapping = np.zeros(self._img_shape,dtype=np.int64)
+        mapping[(hits_i[valid], hits_j[valid])] = xy_scaled[valid]
+        mapping[(hits_i[invalid], hits_j[invalid])] = 0
 
     def _update_stats(self):
-        self._stats = {'rays_hit': RayTracer.count_rays(self._rays.get_hit_indices()),
-                       'n_rays': RayTracer.count_rays(self._rays.get_rays(only_active=False)),
-                       'n_bounces': RayTracer.count_rays(self._n_bounce)}
+        n_rays_hit = np.sum(self._hit_xyz_coords[:,:,0] != self._NO_HIT_Z)
+        self._stats = {'rays_hit': n_rays_hit,
+                       'n_rays': np.prod(self._img_shape),
+                       'n_bounces': self._n_bounce}
 
-    def _set_geometry(self):
-        window = self._mirrors.get_inscribed_rectangle()
+    def _set_geometry(self, view_dir=(0.0, 0.0, 1.0), target_dist_m=1.0):
+        self._targ_z = target_dist_m
+        self._view_dir = np.array(view_dir)
+
+        self._2d_window = self._mirrors.get_inscribed_rectangle()  # absolute coords
+        self._image_plane_half_xy_spans = np.array([self._2d_window['right'] - self._2d_window['left'],
+                                                    self._2d_window['top'] - self._2d_window['bottom'], ])
+        self._image_plane_z = self._image_plane_half_xy_spans[0] / np.tan(self._fov / 2.0)
+        # self._image_px_per_m = (self._img_shape[1] / 2.) / self._image_plane_half_xy_spans[0]
+        logging.info("Raytracing staring with geometry:  image_plane_z = %.6f" % (
+            self._image_plane_z))
+
+    def _bounce(self):
 
     def start(self):
         self._render_thread.start()
 
     def get_current_map(self):
-        return self._map
+        with self._update_result_lock:
+            return self._map
 
     def shutdown(self):
         self._shutdown = True
 
-    @staticmethod
-    def count_rays(ray_index_array):
-        return np.sum(np.is_none(ray_index_array))
+
+def unit_vecs(vecs):
+    return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
 
 
-'''
 class RayBundle(object):
     """
     Represents a grid of rays, update as they reflect, etc.
     Preserve array shape using mask.
     """
 
-    def __init__(self, ray_origins, ray_directions, init_active=True):
+    def __init__(self, shape, image_plane_xy_span, image_plane_depth, origin=(0.0, 0.0, 0.0), init_active=True):
         """
         initialize with explicit rays
         :param ray_origins:  H x W x 3 array, x, y, z coords of ray origin points
         :param ray_directions:  H x W x 3 array, vectors indicating ray directions
         :param init_active: initialize mask to this value
         """
-        self._active = np.full(ray_origins.shape[:2], init_active)
+        self._shape = shape
+        self._ray_origins = np.zeros((shape[0], shape[1], 3), dtype=np.float64)
+        ray_endpoints_x = np.linspace(image_plane_xy_span['left'], image_plane_xy_span['right'], shape[1])
+        self._ray_directions = unit_vecs(ray_endpoints_x - self._ray_origins)
+        self._active_rays = np.full(shape, init_active)
 
-        if len(ray_origins.shape) == 2:
-            ray_origins = ray_origins.reshape(-1, 1, 3)
-        if len(ray_directions.shape) == 2:
-            ray_directions = ray_directions.reshape(-1, 1, 3)
-        self._origins = ray_origins
-        self._directions = ray_directions
-        self._directions /= np.linalg.norm(self._directions, axis=2, keepdims=True)  # unit-ize
-        self._distances = 0 * self._origins[:, :, 0]
         logging.info("Generated RayBundle with %i rays." % (self._active.size,))
         self._history = []
 
-    @staticmethod
-    def from_resolution_and_fov(resolution, image_plane_z, fov_deg=45.0, square=False, **kwargs):
-        """
-        Initialize from desired components...
-        :param resolution: (h, w)
-        :param image_plane_z:  how far from origin
-        :param fov:  how wide is view angle of NARROWER of two dimensions
-        :param kwargs: other params for RayBundle.__init__()
-        :return:
-        """
-
-        fov = np.deg2rad(fov_deg / 2.0)
-        half_span = image_plane_z * np.tan(fov)
-        xy_aspect = float(resolution[1]) / resolution[0]
-        if square:
-            x_half_span = half_span
-            y_half_span = half_span
-        elif (xy_aspect < 1.0):
-            x_half_span = half_span
-            y_half_span = x_half_span / xy_aspect
-        else:
-            y_half_span = half_span
-            x_half_span = y_half_span * xy_aspect
-
-        return RayBundle.from_origin_to_plane([-x_half_span, x_half_span],
-                                              [-y_half_span, y_half_span],
-                                              image_plane_z, resolution, **kwargs)
-
-    @staticmethod
-    def from_origin_to_plane(x_span, y_span, z, res, **kwargs):
-        """
-        initialize a grid from 2-d extent and distance from origin
-
-        :param x_span:  [left, right] extent of 2-d coordinate grid
-        :param y_span:  [bottom and top] extent
-        :param z:  distance from origin (cm)
-        :param res:  number of rays along horizontal and vertical directions
-        :return: RayBundle object
-        """
-        px = np.linspace(x_span[0], x_span[1], res[1]) if res[1] > 1 else np.array(np.mean(x_span))
-        py = np.linspace(y_span[0], y_span[1], res[0]) if res[0] > 1 else np.array(np.mean(y_span))
-
-        x, y = np.meshgrid(px, py)
-        img_coords = np.dstack((x, y, np.ones(x.shape) * z))
-
-        # Create rays
-        eye = np.zeros(3).reshape(1, 3)
-        rays = img_coords - eye
-        origins = 0 * rays
-        return RayBundle(origins, rays, **kwargs)
-
     def get_active_rays(self):
-        return self._origins[self._active], self._directions[self._active]
+        return self._active_rays
 
     def get_active_count(self):
-        return np.sum(self._active)
-
-    def get_active(self):
-        return self._active
+        return np.sum(self._active_rays)
 
     def set_all_active(self):
         self._active = np.full(self._active.shape, True)
-
-    def plot_3d(self, distances=0.1, mask=None, color=(0., 0., 0., 0.8), ax=None):
-        """
-        Plot lines from ray origins to distances.
-        :param distances:   length of subset, should be scalar or same shape os self._origins.shape[:2]
-        :param mask: only plot active rays & this mask
-        :param color: plot this color
-        :param ax:  plot axis object
-        """
-        if ax is None:
-            fig = plt.figure()
-            ax = fig.add_subplot(111, projection='3d')
-        n = np.sum(mask) if mask is not None else np.sum(self._active)
-        ultra_mask = self._active
-        if mask is not None:
-            ultra_mask = _double_index(self._active, mask)
-        x = np.zeros(n * 3, dtype=np.float64)
-        y = 0 * x
-        z = 0 * x
-        if isinstance(distances, np.ndarray):
-            distances = distances.reshape(-1, 1)
-        destinations = self._origins[ultra_mask] + self._directions[ultra_mask] * distances
-        x[0::3] = self._origins[ultra_mask][:, 0]
-        x[1::3] = destinations[:, 0]
-        x[2::3] = np.nan
-        y[0::3] = self._origins[ultra_mask][:, 1]
-        y[1::3] = destinations[:, 1]
-        y[2::3] = np.nan
-        z[0::3] = self._origins[ultra_mask][:, 2]
-        z[1::3] = destinations[:, 2]
-        z[2::3] = np.nan
-        ax.scatter(x[0::3], y[0::3], z[::3], color=color)
-        handle = ax.plot(x, y, z, color=color)
-
-        return handle, ax
 
     def get_prism_intersections(self, prism, **kwargs):
         """
@@ -257,6 +214,42 @@ class RayBundle(object):
 
     def get_shape(self):
         return self._directions.shape[:2]
+
+    '''
+    def plot_3d(self, distances=0.1, mask=None, color=(0., 0., 0., 0.8), ax=None):
+        """
+        Plot lines from ray origins to distances.
+        :param distances:   length of subset, should be scalar or same shape os self._origins.shape[:2]
+        :param mask: only plot active rays & this mask
+        :param color: plot this color
+        :param ax:  plot axis object
+        """
+        if ax is None:
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+        n = np.sum(mask) if mask is not None else np.sum(self._active)
+        ultra_mask = self._active
+        if mask is not None:
+            ultra_mask = _double_index(self._active, mask)
+        x = np.zeros(n * 3, dtype=np.float64)
+        y = 0 * x
+        z = 0 * x
+        if isinstance(distances, np.ndarray):
+            distances = distances.reshape(-1, 1)
+        destinations = self._origins[ultra_mask] + self._directions[ultra_mask] * distances
+        x[0::3] = self._origins[ultra_mask][:, 0]
+        x[1::3] = destinations[:, 0]
+        x[2::3] = np.nan
+        y[0::3] = self._origins[ultra_mask][:, 1]
+        y[1::3] = destinations[:, 1]
+        y[2::3] = np.nan
+        z[0::3] = self._origins[ultra_mask][:, 2]
+        z[1::3] = destinations[:, 2]
+        z[2::3] = np.nan
+        ax.scatter(x[0::3], y[0::3], z[::3], color=color)
+        handle = ax.plot(x, y, z, color=color)
+
+        return handle, ax
 
     def plot_bounce_history(self, bounce_hist, mask=None, ax=None, flat=True, **kwargs):
         if ax is None:
@@ -420,200 +413,200 @@ class MirrorTube(object):
 
             # Turn off disallowed intersections (mirror hit from previous iteration), by setting dist to inf.
             active_last_hits = last_hits[active.reshape(-1)]
-                valid_active_last_hits = active_last_hits >= 0
-                turn_off_idx = np.where(valid_active_last_hits)[0], active_last_hits[valid_active_last_hits]
-                invalid_m_dists[turn_off_idx] = True
+            valid_active_last_hits = active_last_hits >= 0
+            turn_off_idx = np.where(valid_active_last_hits)[0], active_last_hits[valid_active_last_hits]
+            invalid_m_dists[turn_off_idx] = True
+
+            # Also turn of ray/surface paris that are oriented incorrectly (non-positive distance, or too big).
+            with np.errstate(divide='ignore', invalid='ignore'):  # some may now be inf
+                diverging = np.logical_or(mirror_dists < 0, np.isinf(mirror_dists))
+                diverging = np.logical_or(mirror_dists > max_dist, diverging)
+            invalid_m_dists[diverging] = True
+
+            # Now turn of ray/mirror intersections  that are below the bottom of the mirror.
+            bottom_z = self._facets.get_height() + scope_top_z_cm
+            too_low = mirror_intersects[:, 2, :] > bottom_z
+            invalid_m_dists[too_low] = True
+            mirror_dists[invalid_m_dists] = np.inf
+
+            # See which rays hit the ground before any mirrors (inside).
+            m_hits = np.argmin(mirror_dists, axis=1)  # ray is shortest distance from which mirror?
+            closest_dists = mirror_dists[(np.arange(n_active), m_hits)]
+            ground_hits = closest_dists > ground_dists.reshape(-1)
+
+            # check for rays going over top & outside circle (only first time)
+            if iteration == 0:
+                # ray goes over scope if it goes over any mirror (breaks non-convexity)
+                missed_scope = np.logical_and(mirror_intersects[:, 2, :] < scope_top_z_cm,
+                                              0.0 < mirror_intersects[:, 2, :])
+                missed_scope = np.logical_or.reduce(missed_scope, axis=1)
+                hit_top = np.logical_and(np.logical_not(missed_scope), outside_circle)
+
+                logging.info("\tIn first iteration, %i rays hit the top, %i rays miss." % (
+                    np.sum(hit_top), np.sum(missed_scope)))
+
+                # save rays that hit the top
+                hit_top_idx = _double_index(active, hit_top)  # should be all active, but be sure...
+                result['hit_top'][hit_top_idx] = True
+                result['image_map'][hit_top_idx, :] = img_plane_intersects[hit_top, :]
+
+                # and rays that missed
+                missed_scope_idx = _double_index(active, missed_scope)
+                result['missed_scope'][missed_scope_idx] = True
+
+                result['ray_distances'][missed_scope_idx] = dist_to_img_plane[missed_scope].reshape(-1)
+                accumulate_bounces(missed_scope_idx, img_plane_intersects[missed_scope, :])
+                ground_hits = np.logical_or(ground_hits, missed_scope)  # add to list of rays that hit ground
+
+            # save & mark for deactivation all rays that hit the ground.
+            logging.info("\tGround has %s rays hitting it first." % (np.sum(ground_hits),))
+            idx = _double_index(active, ground_hits)
+            accumulate_bounces(idx, ground_intersects[ground_hits, :])  # save history of ground hits
+            result['image_map'][idx] = ground_intersects[ground_hits, :]
+            result['ray_distances'][idx] += ground_dists[ground_hits].reshape(-1)
+            result['ray_bounce_counts'][idx] = iteration
+            last_hits[idx.reshape(-1)] = n
+
+            # See which rays hit which mirror first
+
+            for mirror_i in range(n):
+                mirror_hits = (m_hits == mirror_i) & np.logical_not(np.isinf(closest_dists)) & np.logical_not(
+                    ground_hits)
+
+                idx = _double_index(active, mirror_hits)
+                last_hits[idx.reshape(-1)] = mirror_i  # don't hit again next time!
+                logging.info(
+                    "\tMirror %i has %s rays hitting it first" % (mirror_i, np.sum(mirror_hits),))
+
+                accumulate_bounces(idx, mirror_intersects[mirror_hits, :, mirror_i])
+
+                distances = rays.reflect(mirror_hits, mirror_intersects[mirror_hits, :, mirror_i],
+                                         m_normals[mirror_i, :])
+                result['ray_distances'][idx] += distances
+
+            to_deactivate = ground_hits
+            if iteration == 0:
+                to_deactivate = np.logical_or(hit_top, to_deactivate)
+            rays.deactivate(to_deactivate)
+
+        return result
+
+    def get_image_map(self, plot_map=False, **kwargs):
+        result = self.trace(**kwargs)
+        if plot_map:
+            fig, ax = plt.subplots(nrows=1, ncols=2, sharex='all', sharey='all')
+            ax[0].imshow(result['ray_distances'])
+            ax[1].imshow(result['ray_bounce_counts'])
+            plt.suptitle("Image map, distances in [%.3f, %.3f], bounces in [%.i, %.i]." % (
+                np.min(result['ray_distances']),
+                np.max(result['ray_distances']),
+                np.min(result['ray_bounce_counts']),
+                np.max(result['ray_bounce_counts'])))
+            plt.show()
+
+        return result['image_map'][:, :, :2], result
+
+
+def _double_index(mask, sub_mask):
+    """
+    :param mask:  N element bool array
+    :param sub_mask:  bool array, length = np.sum(mask)
+    :return:  N element bool array, sum(return) = sum(mask)
+    """
+    full = mask.copy()
+    full[full] = sub_mask
+    return full
+
+
+def make_stained_glass(image, bounces, thresh=.5):
+    bounces = bounces.astype(np.uint8)
+    laplacian = cv2.Laplacian(bounces, cv2.CV_64F)
+    grad = laplacian  # np.sqrt(sobely * sobely + sobelx * sobelx)
+    """
+    sobelx = cv2.Sobel(bounces, cv2.CV_64F, 1, 0, ksize=5)
+    sobely = cv2.Sobel(bounces, cv2.CV_64F, 0, 1, ksize=5)
     
-                # Also turn of ray/surface paris that are oriented incorrectly (non-positive distance, or too big).
-                with np.errstate(divide='ignore', invalid='ignore'):  # some may now be inf
-                    diverging = np.logical_or(mirror_dists < 0, np.isinf(mirror_dists))
-                    diverging = np.logical_or(mirror_dists > max_dist, diverging)
-                invalid_m_dists[diverging] = True
-    
-                # Now turn of ray/mirror intersections  that are below the bottom of the mirror.
-                bottom_z = self._facets.get_height() + scope_top_z_cm
-                too_low = mirror_intersects[:, 2, :] > bottom_z
-                invalid_m_dists[too_low] = True
-                mirror_dists[invalid_m_dists] = np.inf
-    
-                # See which rays hit the ground before any mirrors (inside).
-                m_hits = np.argmin(mirror_dists, axis=1)  # ray is shortest distance from which mirror?
-                closest_dists = mirror_dists[(np.arange(n_active), m_hits)]
-                ground_hits = closest_dists > ground_dists.reshape(-1)
-    
-                # check for rays going over top & outside circle (only first time)
-                if iteration == 0:
-                    # ray goes over scope if it goes over any mirror (breaks non-convexity)
-                    missed_scope = np.logical_and(mirror_intersects[:, 2, :] < scope_top_z_cm,
-                                                  0.0 < mirror_intersects[:, 2, :])
-                    missed_scope = np.logical_or.reduce(missed_scope, axis=1)
-                    hit_top = np.logical_and(np.logical_not(missed_scope), outside_circle)
-    
-                    logging.info("\tIn first iteration, %i rays hit the top, %i rays miss." % (
-                        np.sum(hit_top), np.sum(missed_scope)))
-    
-                    # save rays that hit the top
-                    hit_top_idx = _double_index(active, hit_top)  # should be all active, but be sure...
-                    result['hit_top'][hit_top_idx] = True
-                    result['image_map'][hit_top_idx, :] = img_plane_intersects[hit_top, :]
-    
-                    # and rays that missed
-                    missed_scope_idx = _double_index(active, missed_scope)
-                    result['missed_scope'][missed_scope_idx] = True
-    
-                    result['ray_distances'][missed_scope_idx] = dist_to_img_plane[missed_scope].reshape(-1)
-                    accumulate_bounces(missed_scope_idx, img_plane_intersects[missed_scope, :])
-                    ground_hits = np.logical_or(ground_hits, missed_scope)  # add to list of rays that hit ground
-    
-                # save & mark for deactivation all rays that hit the ground.
-                logging.info("\tGround has %s rays hitting it first." % (np.sum(ground_hits),))
-                idx = _double_index(active, ground_hits)
-                accumulate_bounces(idx, ground_intersects[ground_hits, :])  # save history of ground hits
-                result['image_map'][idx] = ground_intersects[ground_hits, :]
-                result['ray_distances'][idx] += ground_dists[ground_hits].reshape(-1)
-                result['ray_bounce_counts'][idx] = iteration
-                last_hits[idx.reshape(-1)] = n
-    
-                # See which rays hit which mirror first
-    
-                for mirror_i in range(n):
-                    mirror_hits = (m_hits == mirror_i) & np.logical_not(np.isinf(closest_dists)) & np.logical_not(
-                        ground_hits)
-    
-                    idx = _double_index(active, mirror_hits)
-                    last_hits[idx.reshape(-1)] = mirror_i  # don't hit again next time!
-                    logging.info(
-                        "\tMirror %i has %s rays hitting it first" % (mirror_i, np.sum(mirror_hits),))
-    
-                    accumulate_bounces(idx, mirror_intersects[mirror_hits, :, mirror_i])
-    
-                    distances = rays.reflect(mirror_hits, mirror_intersects[mirror_hits, :, mirror_i],
-                                             m_normals[mirror_i, :])
-                    result['ray_distances'][idx] += distances
-    
-                to_deactivate = ground_hits
-                if iteration == 0:
-                    to_deactivate = np.logical_or(hit_top, to_deactivate)
-                rays.deactivate(to_deactivate)
-    
-            return result
-    
-        def get_image_map(self, plot_map=False, **kwargs):
-            result = self.trace(**kwargs)
-            if plot_map:
-                fig, ax = plt.subplots(nrows=1, ncols=2, sharex='all', sharey='all')
-                ax[0].imshow(result['ray_distances'])
-                ax[1].imshow(result['ray_bounce_counts'])
-                plt.suptitle("Image map, distances in [%.3f, %.3f], bounces in [%.i, %.i]." % (
-                    np.min(result['ray_distances']),
-                    np.max(result['ray_distances']),
-                    np.min(result['ray_bounce_counts']),
-                    np.max(result['ray_bounce_counts'])))
-                plt.show()
-    
-            return result['image_map'][:, :, :2], result
-    
-    
-    def _double_index(mask, sub_mask):
-        """
-        :param mask:  N element bool array
-        :param sub_mask:  bool array, length = np.sum(mask)
-        :return:  N element bool array, sum(return) = sum(mask)
-        """
-        full = mask.copy()
-        full[full] = sub_mask
-        return full
-    
-    
-    def make_stained_glass(image, bounces, thresh=.5):
-        bounces = bounces.astype(np.uint8)
-        laplacian = cv2.Laplacian(bounces, cv2.CV_64F)
-        grad = laplacian  # np.sqrt(sobely * sobely + sobelx * sobelx)
-        """
-        sobelx = cv2.Sobel(bounces, cv2.CV_64F, 1, 0, ksize=5)
-        sobely = cv2.Sobel(bounces, cv2.CV_64F, 0, 1, ksize=5)
-        
-        ksizes = [3, 5, 7, 9]
-        sigmaxs = [0.5, 1.0, 1.5, 3.0, ]
-        ind=0
-        for ki, ksize in enumerate(ksizes):
-            for si, sigmax in enumerate(sigmaxs):
-                ind+=1
-                plt.subplot(len(ksizes), len(sigmaxs), ind)
-                blurred = cv2.GaussianBlur(np.uint8(laplacian > 0.001),
-                                           ksize=ksize,
-                                           sigmaX=sigmax,
-                                           borderType=cv2.BORDER_REFLECT)
-                plt.imshow(blurred)
-                plt.xlabel("%i, %.2f" % (ksize, sigmax))
-        plt.show()
-    
-    
-        plt.imshow(b)
-        plt.colorbar()
-        plt.show()
-        """
-        skeleton = skeletonize(grad > thresh).astype(np.uint8)
-        kern = np.ones((2, 2), dtype=np.uint8)
-        skeleton = cv2.dilate(skeleton, kern, iterations=1)
-        sk = np.where(skeleton > 0)
-        if len(image.shape) > 2:
-            channel_coord = np.zeros(sk[0].size, dtype=np.int64)
-            image[(sk[0], sk[1], channel_coord)] = 0
-            image[(sk[0], sk[1], channel_coord + 1)] = 0
-            image[(sk[0], sk[1], channel_coord + 2)] = 0
-        else:
-            image[sk] = 0
-    
-        return image
-    
-    
-    def test_ray_tracing():
-        geom = NGonPrism(n=4, r=np.sqrt(2.0), height=11.323, phi=np.pi / 4.)
-        mirrors = MirrorTube(prism=geom, )
-        out_shape = (240, 320)
-        fov_deg = 45.
-        ground_z_cm = 20.0
-        r = mirrors.get_view_rad()
-        top_z = r / np.tan(np.deg2rad(fov_deg) / 2.0)
-        print("Test init with mirrors r=%.5f, top_z=%.5f" % (r, top_z))
-    
-        rays = RayBundle.from_resolution_and_fov(resolution=out_shape,
-                                                 image_plane_z=top_z,
-                                                 fov_deg=fov_deg)
-    
-        mirrors = MirrorTube(prism=geom)
-    
-        # load image
-        img = Image.from_file('test_img.jpg', flip_bgr_rgb=True, px_per_cm=(50, 50))
-    
-        # ray-trace
-        img_map, dists, n_bounces, bounce_hist = mirrors.get_image_map(rays=rays,
-                                                                       ground_z_cm=ground_z_cm,
-                                                                       scope_top_z_cm=top_z,
-                                                                       max_reflect=100,
-                                                                       record=True)
-    
-        plt.imshow(dists)
-        plt.colorbar()
-        plt.axis('equal')
-        plt.show()
-    
-        # pretty = img.interpolate(img_map, method='nearest')
-        pretty = img.interpolate_integer(img_map)
-    
-        plt.imshow(pretty)
-        plt.axis('equal')
-        plt.show()
-    
-    
-    if __name__ == "__main__":
-        logging.basicConfig(level=logging.INFO)
-        # test_ray_tracing()
-    
-        import matplotlib.pyplot as plt
-    
-        pic = NGonPrism.get_icon(400)
-        plt.imshow(pic[:, :, ::-1])
-        plt.show()
-    '''
+    ksizes = [3, 5, 7, 9]
+    sigmaxs = [0.5, 1.0, 1.5, 3.0, ]
+    ind=0
+    for ki, ksize in enumerate(ksizes):
+        for si, sigmax in enumerate(sigmaxs):
+            ind+=1
+            plt.subplot(len(ksizes), len(sigmaxs), ind)
+            blurred = cv2.GaussianBlur(np.uint8(laplacian > 0.001),
+                                       ksize=ksize,
+                                       sigmaX=sigmax,
+                                       borderType=cv2.BORDER_REFLECT)
+            plt.imshow(blurred)
+            plt.xlabel("%i, %.2f" % (ksize, sigmax))
+    plt.show()
+
+
+    plt.imshow(b)
+    plt.colorbar()
+    plt.show()
+    """
+    skeleton = skeletonize(grad > thresh).astype(np.uint8)
+    kern = np.ones((2, 2), dtype=np.uint8)
+    skeleton = cv2.dilate(skeleton, kern, iterations=1)
+    sk = np.where(skeleton > 0)
+    if len(image.shape) > 2:
+        channel_coord = np.zeros(sk[0].size, dtype=np.int64)
+        image[(sk[0], sk[1], channel_coord)] = 0
+        image[(sk[0], sk[1], channel_coord + 1)] = 0
+        image[(sk[0], sk[1], channel_coord + 2)] = 0
+    else:
+        image[sk] = 0
+
+    return image
+
+
+def test_ray_tracing():
+    geom = NGonPrism(n=4, r=np.sqrt(2.0), height=11.323, phi=np.pi / 4.)
+    mirrors = MirrorTube(prism=geom, )
+    out_shape = (240, 320)
+    fov_deg = 45.
+    ground_z_cm = 20.0
+    r = mirrors.get_view_rad()
+    top_z = r / np.tan(np.deg2rad(fov_deg) / 2.0)
+    print("Test init with mirrors r=%.5f, top_z=%.5f" % (r, top_z))
+
+    rays = RayBundle.from_resolution_and_fov(resolution=out_shape,
+                                             image_plane_z=top_z,
+                                             fov_deg=fov_deg)
+
+    mirrors = MirrorTube(prism=geom)
+
+    # load image
+    img = Image.from_file('test_img.jpg', flip_bgr_rgb=True, px_per_cm=(50, 50))
+
+    # ray-trace
+    img_map, dists, n_bounces, bounce_hist = mirrors.get_image_map(rays=rays,
+                                                                   ground_z_cm=ground_z_cm,
+                                                                   scope_top_z_cm=top_z,
+                                                                   max_reflect=100,
+                                                                   record=True)
+
+    plt.imshow(dists)
+    plt.colorbar()
+    plt.axis('equal')
+    plt.show()
+
+    # pretty = img.interpolate(img_map, method='nearest')
+    pretty = img.interpolate_integer(img_map)
+
+    plt.imshow(pretty)
+    plt.axis('equal')
+    plt.show()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    # test_ray_tracing()
+
+    import matplotlib.pyplot as plt
+
+    pic = NGonPrism.get_icon(400)
+    plt.imshow(pic[:, :, ::-1])
+    plt.show()
+'''
