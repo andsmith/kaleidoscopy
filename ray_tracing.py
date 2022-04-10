@@ -3,6 +3,7 @@ from multiprocessing import cpu_count, Pool
 from threading import Thread, Lock
 import logging
 import numpy as np
+from surfaces import Cylinder, Plane
 
 
 class RayTracer(object):
@@ -13,16 +14,27 @@ class RayTracer(object):
         self._n_cores = n_cores if n_cores > 0 else cpu_count() - 1  # save one for rendering?
         logging.info("Ray-tracer created running with %i cores." % (self._n_cores,))
         self._fov = np.deg2rad(fov_deg_x)
-        self._n_bounce = 0
+
+        # dimensions
         self._target_xy_span = np.array(target_xy_span)
         self._target_resolution = np.array(target_resolution)
         self._target_xy_scale = self._target_xy_span / self._target_resolution
-
         logging.info("_target_xy_span:  %s" % (self._target_xy_span,))
         logging.info("_target_resolution:  %s" % (self._target_resolution,))
         logging.info("_target_xy_scale:  %s" % (self._target_xy_scale,))
+
+        # state
         self._update_result_lock = Lock()
         self._shutdown = False
+
+        # Ray-tracing things
+        self._origin = np.array([0.0, 0.0, 0.0])  # focus, eyeball
+        self._target_plane_z_dist = 1.0
+        self._target_plane_xyz_intersect  = np.array([0.0, 0.0, self._target_plane_z_dist])
+        self._target_plane_normal = self._origin - self._target_plane_xyz_intersect
+        self._target_surface = Plane(self._target_plane_xyz_intersect, self._target_plane_normal)
+        self._n_bounce = 0
+        self._mirror_surfaces = None  # things rays hit
         self._rays = None
         self._aspect = float(resolution[0]) / float(resolution[1])
         self._geom = {}
@@ -47,7 +59,7 @@ class RayTracer(object):
                                image_plane_xy_span=self._2d_window,
                                image_plane_depth=self._image_plane_z)
 
-        while not self._shutdown and self._rays.get_active_rays().size>0:
+        while not self._shutdown and self._rays.get_active_rays().size > 0:
             self._bounce()  # advance rays to next surface, accumulate results
             with self._update_result_lock:
                 self._make_new_map()
@@ -78,12 +90,12 @@ class RayTracer(object):
         x_scaled = np.int64(x_scaled)
         y_scaled = np.ing64(y_scaled)
         xy_scaled = x_scaled + y_scaled * self._img_shape[0]
-        mapping = np.zeros(self._img_shape,dtype=np.int64)
+        mapping = np.zeros(self._img_shape, dtype=np.int64)
         mapping[(hits_i[valid], hits_j[valid])] = xy_scaled[valid]
         mapping[(hits_i[invalid], hits_j[invalid])] = 0
 
     def _update_stats(self):
-        n_rays_hit = np.sum(self._hit_xyz_coords[:,:,0] != self._NO_HIT_Z)
+        n_rays_hit = np.sum(self._hit_xyz_coords[:, :, 0] != self._NO_HIT_Z)
         self._stats = {'rays_hit': n_rays_hit,
                        'n_rays': np.prod(self._img_shape),
                        'n_bounces': self._n_bounce}
@@ -123,7 +135,7 @@ class RayBundle(object):
     Preserve array shape using mask.
     """
 
-    def __init__(self, shape, image_plane_xy_span, image_plane_depth, origin=(0.0, 0.0, 0.0), init_active=True):
+    def __init__(self, shape, image_plane_xy_span,, origin=None, init_active=True):
         """
         initialize with explicit rays
         :param ray_origins:  H x W x 3 array, x, y, z coords of ray origin points
@@ -132,6 +144,8 @@ class RayBundle(object):
         """
         self._shape = shape
         self._ray_origins = np.zeros((shape[0], shape[1], 3), dtype=np.float64)
+        if origin is not None:
+            self._ray_origins += np.array(origin).reshape(-1)
         ray_endpoints_x = np.linspace(image_plane_xy_span['left'], image_plane_xy_span['right'], shape[1])
         self._ray_directions = unit_vecs(ray_endpoints_x - self._ray_origins)
         self._active_rays = np.full(shape, init_active)
@@ -166,30 +180,6 @@ class RayBundle(object):
             intersects = np.dstack([result[1] for result in results])
         return dists, intersects
 
-    def get_plane_intersections(self, point, normal, no_points=False):
-        """
-        Find intersection of ACTIVE rays with given plane.
-        :param point:  a point on the plane
-        :param normal:  normal vector to plane
-        :param no_points:  just calculate distance, not intersection points
-        :return: N distances for N active rays,
-                 N x 3 intersection points for N active rays, or None if no_points is True.
-        """
-        point = point.reshape(-1)
-        normal = normal.reshape(-1)
-
-        origins = self._origins[self._active].reshape(-1, 3)
-        directions = self._directions[self._active].reshape(-1, 3)
-
-        with np.errstate(divide='ignore', invalid='ignore'):
-            # parallel rays go to np.inf
-            dists = np.dot(point - origins, normal) / np.dot(directions, normal)
-
-        dists = dists.reshape(-1, 1)
-        points = None
-        if not no_points:
-            points = origins + dists * directions
-        return dists, points
 
     def deactivate(self, inactive):
         self._active[_double_index(self._active, inactive)] = False

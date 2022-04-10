@@ -14,7 +14,7 @@ class IsoscelesPrism(MirrorPrism):
     SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS + \
                            [' Left-click + Drag up-and-down:  Vertex angle"']
 
-    def get_rel_shape(self, scale=1.0, **kwargs):
+    def get_rel_shape(self, **kwargs):
         """
         Get coordinates of vertices of current shape,  fit into the unit square.
         """
@@ -23,17 +23,16 @@ class IsoscelesPrism(MirrorPrism):
         bottom_right = (0.5 + np.sin(self._theta / 2.0), 1.0 - np.cos(self._theta / 2.0))
         points = np.array([top, bottom_left, bottom_right])
 
-        points = transform_points(unit_points=points, scale=scale, center = np.array([0.5,0.5]))
+        points = transform_points(unit_points=points, scale=self._aperture_scale, center = np.array([0.5,0.5]))
 
         return points
 
-    def set_corners(self, theta_deg, h_cm, **kwargs):
-        theta = np.deg2rad(theta_deg)
-        corners = [np.array([-np.sin(theta), -h_cm / 2]),
-                   np.array([0, h_cm / 2]),
-                   np.array([np.sin(theta), -h_cm / 2]), ]
-        corners = np.array(corners + corners[0])
-        super(IsoscelesPrism, self)._set_corners(corners=corners, **kwargs)
+
+
+    def get_surfaces(self):
+        """
+        Get Surface() objects (corresponding to all mirrors) from current params
+        """
 
     def _mouse_adjust(self, pos, d_pos, d_button, button_state, keyboard_state):
 

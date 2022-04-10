@@ -15,8 +15,8 @@ from scipy.optimize import minimize
 from pynput import keyboard
 from gui_utils.mouse import MouseKeyboardState, ButtonStates, MouseButtons
 from gui_utils.text_annotation import get_best_font_scale
-import faulthandler
-
+import faulthandler  # div/0
+from surfaces import Plane
 
 
 class MirrorPrism(ABC):
@@ -45,11 +45,41 @@ class MirrorPrism(ABC):
         self._base_aperture_scale = None
 
     @abstractmethod
-    def get_rel_shape(self, scale=1.0, **kwargs):
+    def get_rel_shape(self, **kwargs):
         """
         Get shape of mirrors, scaled to fit into unit square.
         """
         pass
+
+    def get_surfaces(self):
+        """
+        Get Surface() objects (corresponding to all mirrors) from current params
+
+        Default behav. is to transform vertices from get_rel_shape() into Plane() objects.
+        """
+        origin = np.zeros((1, 2), dtype=np.float64)
+        surfaces = []
+        vertices = self.get_rel_shape()
+        n_planes = len(vertices)
+        vertices = np.array(vertices + [vertices[-1]])
+        for i in range(n_planes):
+            p1 = vertices[i, :]
+            p2 = vertices[i + 1, :]
+            xy_intersection = (p1 + p2) / 2.0  # midpoint
+
+            # for normal, use cross-product between sides of rectangle (top/bottom don't matter)
+            top_p1 = np.array([p1[0], p1[1], 0.0])
+            top_p2 = np.array([p2[0], p2[1], 0.0])
+            bottom_p1 = np.array([p1[0], p1[1], 1.0])
+            norm_vec = np.cross(top_p2-top_p1, bottom_p1 - top_p1)
+            norm_vec /= np.linalg.norm(norm_vec)
+            ray_to_origin = origin - xy_intersection
+            if np.dot(norm_vec, ray_to_origin) <0:  # pointed away from origin
+                norm_vec =-norm_vec
+            surfaces.append(Plane(xyz_intersect=(xy_intersection[0], xy_intersection[1], 0.0),
+                                  normal = norm_vec))
+        return surfaces
+
 
     def start_shaping(self, window_name, finished_event):
         """
@@ -118,7 +148,7 @@ class MirrorPrism(ABC):
         """
         if xy_resolution[1] > xy_resolution[0]:
             raise Exception("Portrait aspect ratios not implemented.")
-        verts = self.get_rel_shape(scale=self._aperture_scale)
+        verts = self.get_rel_shape()
         xy_aspect = float(xy_resolution[0]) / float(xy_resolution[1])
         img_scale = 1.0 / float(xy_resolution[1])
         half_box_scale = img_scale * 2  # start 4 pixels wide
@@ -163,7 +193,7 @@ class MirrorPrism(ABC):
         """
         :param res:  (w, h) of image  (i.e. reverse from numpy)
         """
-        points = self.get_rel_shape(self._aperture_scale)
+        points = self.get_rel_shape()
         side_length = np.min(res[:2])
 
         x_offset = np.max((0, res[0] - side_length)) / 2

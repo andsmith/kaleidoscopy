@@ -19,13 +19,13 @@ class NGonPrism(MirrorPrism):
     def get_name(cls):
         return " n-polygon "
 
-    def get_rel_shape(self, scale=1.0, **kwargs):
+    def get_rel_shape(self, **kwargs):
         """
         Get coordinates of vertices of current shape, fit into the unit square.
         """
         theta = np.linspace(self._phi, np.pi * 2 + self._phi, self._n, endpoint=False)
         points = np.array([(np.cos(t), np.sin(t)) for t in theta]) * 0.5 + np.array([0.5, 0.5]).reshape(1,2)
-        points = transform_points(unit_points=points, scale=scale, center=np.array([0.5, 0.5]))
+        points = transform_points(unit_points=points, scale=self._aperture_scale, center=np.array([0.5, 0.5]))
 
         return points
 
@@ -58,6 +58,14 @@ class NGonPrism(MirrorPrism):
                     self._mask = None
         else:
             self._button_first_pressed_pos = None
+
+
+
+    def get_surfaces(self):
+        """
+        Get Surface() objects (corresponding to all mirrors) from current params
+        """
+
 
     @classmethod
     def get_icon_vertices(cls):
