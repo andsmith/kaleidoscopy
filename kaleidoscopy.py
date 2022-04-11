@@ -1,12 +1,12 @@
-#import pylab as plt
+# import pylab as plt
 import numpy as np
 import cv2
 import logging
 import time
 # from util import make_bounds, TextManager, Image
 from threading import Lock, Event, enumerate, get_ident, Thread
-from ray_tracing import  RayTracer
-from prisms import  PRISMS
+from ray_tracing import RayTracer
+from prisms import PRISMS
 from enum import Enum
 from gui_utils.gui_picker import ChooseItemDialog
 from gui_utils.camera import Camera, pick_camera
@@ -42,7 +42,7 @@ class KScopyApp(object):
         self._app_flow_lock = Lock()
         self._waiter = Event()
         self._OSD_on = True
-        self._k_map = None  # stores current input-output mapping of pixels
+        self._k_map = None  # stores current input-output mapping of pixels, bounce counts, distance traveled, etc.
         self._render_stats = None
         self._raytracing_stats = None
 
@@ -51,14 +51,17 @@ class KScopyApp(object):
 
                          {'key': 'q', 'desc': 'Quit', 'func': self._shutdown,
                           'txt': "Q - Quit."}]
-
+        self._last_frame_complete_time = None
+        self._idle_pct_sum = 0
         self._fps = {'n_in': 0,
                      'n_out': 0,
                      'n_dropped': 0,
+                     'fps % sum': 0.0,
                      'last_update_time': time.time() - self._FPS_PERIOD_SEC - 1.0,
                      'fps_in': 0,
                      'fps_out': 0,
-                     'fps_drop': 0}
+                     'fps_drop': 0,
+                     'fps_idle_pct': 0.0}
 
         self._drop_frame_lock = Lock()
 
@@ -86,7 +89,9 @@ class KScopyApp(object):
 
             # User shapes mirror parameters
             self._user_shape_mirrors()
-            self._ray_tracer = RayTracer(self._mirrors, self._resolution, self._update_k_map)
+            self._ray_tracer = RayTracer(mirrors=self._mirrors,
+                                         target_resolution=self._resolution,
+                                         update_callback=self._update_k_map)
 
             # Start raytracing and rendering
             self._start()
@@ -97,7 +102,7 @@ class KScopyApp(object):
 
     def _update_k_map(self, img_map, stats):
         self._k_map = img_map
-        self._render_stats = "Ray-tracing:  %i of %i rays hit image in at most %i bounces." % (
+        self._raytracing_stats_stats = "Ray-tracing:  %i of %i rays hit image in at most %i bounces." % (
             stats['rays_hit'], stats['n_rays'], stats['n_bounces'])
 
     def _toggle_osd(self):
@@ -113,7 +118,6 @@ class KScopyApp(object):
 
         # begin
         self._ray_tracer.start()
-
 
     def _shutdown(self):
         self._state = KScopeState.shutdown
@@ -160,12 +164,22 @@ class KScopyApp(object):
 
     def _proc_frame(self, in_frame, frame_time):
         self._fps['n_in'] += 1
+        start_time = time.perf_counter()
         if self._drop_frame_lock.acquire(blocking=False):
             self._proc_frame_helper(in_frame, frame_time)
             self._drop_frame_lock.release()
         else:
             logging.warning("DROP")
             self._fps['n_dropped'] += 1
+
+        # calc cpu workload %
+        finish_time = time.perf_counter()
+        elapsed = finish_time - self._last_frame_complete_time
+        working_time = finish_time - start_time
+        idle = working_time / elapsed
+        self._idle_pct_sum += idle * 100.0
+
+        self._last_frame_complete_time = finish_time
 
     def _proc_frame_helper(self, in_frame, frame_time):
         """
@@ -223,6 +237,7 @@ class KScopyApp(object):
     def _render(self, frame):
         if self._k_map is None:
             self._ray_tracer.get_current_map()
+        out_frame = self._renderer.render(frame, self._k_map['mapping'])
         return frame.copy()
 
     def _update_osd_info(self):
@@ -238,14 +253,14 @@ class KScopyApp(object):
             self._fps['fps_in'] = self._fps['n_in'] / elapsed
             self._fps['fps_out'] = self._fps['n_out'] / elapsed
             self._fps['fps_drop'] = self._fps['n_dropped'] / elapsed
-
+            self._fps['fps_idle_pct'] = self._fps['idle % sum'] / elapsed
             self._fps['n_in'] = 0
             self._fps['n_out'] = 0
             self._fps['n_dropped'] = 0
 
-            self._status_bar.add_msg("FPS:  in = %.3f,  out = %.3f,  drop = %i" % (
+            self._status_bar.add_msg("FPS:  in = %.3f,  out = %.3f,  drop = %i,  idle_pct = %i" % (
                 self._fps['fps_in'], self._fps['fps_out'],
-                self._fps['fps_drop']), "fps")
+                self._fps['fps_drop'], self._fps['fps_idle_pct']), "fps")
             self._fps['last_update_time'] = time.time()
 
         if self._raytracing_stats is not None:

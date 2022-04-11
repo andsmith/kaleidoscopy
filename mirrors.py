@@ -13,9 +13,10 @@ import logging
 import cv2
 from scipy.optimize import minimize
 from pynput import keyboard
+import faulthandler  # div/0
+
 from gui_utils.mouse import MouseKeyboardState, ButtonStates, MouseButtons
 from gui_utils.text_annotation import get_best_font_scale
-import faulthandler  # div/0
 from surfaces import Plane
 
 
@@ -71,15 +72,14 @@ class MirrorPrism(ABC):
             top_p1 = np.array([p1[0], p1[1], 0.0])
             top_p2 = np.array([p2[0], p2[1], 0.0])
             bottom_p1 = np.array([p1[0], p1[1], 1.0])
-            norm_vec = np.cross(top_p2-top_p1, bottom_p1 - top_p1)
+            norm_vec = np.cross(top_p2 - top_p1, bottom_p1 - top_p1)
             norm_vec /= np.linalg.norm(norm_vec)
             ray_to_origin = origin - xy_intersection
-            if np.dot(norm_vec, ray_to_origin) <0:  # pointed away from origin
-                norm_vec =-norm_vec
+            if np.dot(norm_vec, ray_to_origin) < 0:  # pointed away from origin
+                norm_vec = -norm_vec
             surfaces.append(Plane(xyz_intersect=(xy_intersection[0], xy_intersection[1], 0.0),
-                                  normal = norm_vec))
+                                  normal=norm_vec))
         return surfaces
-
 
     def start_shaping(self, window_name, finished_event):
         """
@@ -140,43 +140,52 @@ class MirrorPrism(ABC):
         """
         pass
 
-    def get_inscribed_rectangle(self, xy_resolution, margin=0.05):
+    def get_inscribed_rectangle_size(self, aspect, search_resolution_px=501, margin=0.05):
         """
-        Get largest rectangle fitting inside shape, leaving margin space.
-        :param xy_resolution:  width,height of rectangle
-        :returns x half-width, y-half width of rectangle
+        Get largest rectangle with given aspect ratio, fitting inside shape, leaving 'margin' space between the two.
+        :param aspect:  width/height of rectangle
+        :param search_resolution_px: grow box by 1 pixel at a time in an image of this size^2
+        :returns: array [x half-width, y half-width] of rectangle
         """
-        if xy_resolution[1] > xy_resolution[0]:
+        if aspect < 1.0:
             raise Exception("Portrait aspect ratios not implemented.")
         verts = self.get_rel_shape()
-        xy_aspect = float(xy_resolution[0]) / float(xy_resolution[1])
-        img_scale = 1.0 / float(xy_resolution[1])
-        half_box_scale = img_scale * 2  # start 4 pixels wide
-        img = np.zeros((xy_resolution[1], xy_resolution[0], 3), dtype=np.uint8) + 1
-        masked = self.get_masked_image(img)
-        half_box_size = np.array([half_box_scale / xy_aspect, half_box_scale])
-        img_center = (np.array(xy_resolution) / 2.0).astype(np.int64)
-        final_half_box_size = None
-        while half_box_size[0] < xy_resolution[0] / 2 and half_box_size[1] < xy_resolution[1] / 2:
-            half_box_scale += img_scale
-            half_box_size = np.array([half_box_scale / xy_aspect, half_box_scale])
-            half_box_px = half_box_size / img_scale
+        img_scale = 1.0 / float(search_resolution_px)
 
-            b = np.int64(half_box_px)
-            print(half_box_size)
-            print(b)
-            edges = [masked[img_center[1] - b[1]: img_center[1] + b[1], img_center[0] - b[0], 0].reshape(-1),
-                     masked[img_center[1] - b[1]: img_center[1] + b[1], img_center[0] + b[0], 0].reshape(-1),
-                     masked[img_center[1] - b[1], img_center[0] - b[0]: img_center[0] + b[0], 0].reshape(-1),
-                     masked[img_center[1] + b[1], img_center[0] - b[0]: img_center[0] + b[0], 0].reshape(-1), ]
-            if np.sum(np.hstack(edges)) > 0:
-                half_box_scale -= img_scale
-                half_box_scale *= (1.0 - margin)
-                final_half_box_size = np.array([half_box_scale / xy_aspect, half_box_scale])
+        img_shape = search_resolution_px, search_resolution_px  # shape already fits in square
+        c_xy = (np.array(img_shape)[::-1] / 2.0).astype(np.int64)
+
+        img = np.zeros((img_shape[0], img_shape[1], 3), dtype=np.uint8) + 255
+        masked = self.get_masked_image(img)  # will be zero outside shape, 255 inside
+
+        box_size_px = np.array([1.0, 1.0 / aspect])
+        box_size_step = box_size_px.copy()
+
+        final_half_box_size = None
+        while int(box_size_px[0] * 2) < img_shape[1] and int(box_size_px[1] * 2) < img_shape[0]:
+            box_size_px += box_size_step
+            bsp = box_size_px.astype(np.int64)
+
+            #print(c_xy, bsp, box_size_px, c_xy + bsp , c_xy-bsp)
+
+            if np.sum(c_xy - bsp < 0) + np.sum(c_xy + bsp > search_resolution_px) > 0:
+                # too big
+                logging.warning("Shape may not fit in unit square!")
+                final_half_box_size = (box_size_px - box_size_step - margin) * img_scale
                 break
+
+            edges = [masked[c_xy[1] - bsp[1]: c_xy[1] + bsp[1], c_xy[0] - bsp[0], 0].reshape(-1),
+                     masked[c_xy[1] - bsp[1]: c_xy[1] + bsp[1], c_xy[0] + bsp[0], 0].reshape(-1),
+                     masked[c_xy[1] - bsp[1], c_xy[0] - bsp[0]: c_xy[0] + bsp[0], 0].reshape(-1),
+                     masked[c_xy[1] + bsp[1], c_xy[0] - bsp[0]: c_xy[0] + bsp[0], 0].reshape(-1), ]
+
+            if np.sum(np.hstack(edges) == 0) > 0:
+                final_half_box_size = (box_size_px - box_size_step - margin) * img_scale
+                break
+
         if final_half_box_size is None:
-            raise Exception("Couldn't fit rectangle in shape:  %s" % (verts,))
-        return final_half_box_size
+            raise Exception("Couldn't fit rectangle in shape:  %s.  Is it too close to the origin?" % (verts,))
+        return final_half_box_size * 2.0
 
     def handle_keyboard_adjust(self, k):
         """
@@ -437,9 +446,6 @@ def plot_3d_polygon(corners, ax, color=(0.1, .15, 1.0, .5), **kwargs):
 
 
 if __name__ == "__main__":
-    import ipdb;
-
-    ipdb.set_trace()
     faulthandler.enable()
     logging.basicConfig(level=logging.INFO)
     # test_ray_tracing()
