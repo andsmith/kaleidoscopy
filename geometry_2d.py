@@ -400,17 +400,44 @@ def test_line_intersect_line():
     tol = 1e-6
     big = tol * 100
     small = tol / 100
+
     tests = [(Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
               Segment2D(Point2D(1., 0., abs_tol=tol), Point2D(0., 1., abs_tol=tol)),
-              Point2D(0.5, 0.5, abs_tol=tol)),
+              Point2D(0.5, 0.5, abs_tol=tol)),  # intersecting
+             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
+              Segment2D(Point2D(0.1, 0.2, abs_tol=tol), Point2D(1.1, 1.2, abs_tol=tol)),
+              None),  # parallel
+             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
+              Segment2D(Point2D(1., 0., abs_tol=tol), Point2D(0.6, 0.4, abs_tol=tol)),
+              None),  # not parallel, but not intersecting
+             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
+              Segment2D(Point2D(1., 1., abs_tol=tol), Point2D(2., 0., abs_tol=tol)),
+              Point2D(0.5, 0.5, abs_tol=tol),0),  # shared endpoint intersection
+             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
+              Segment2D(Point2D(1., 0., abs_tol=tol), Point2D(0.5, 0.5, abs_tol=tol)),
+              Point2D(0.5, 0.5, abs_tol=tol)),  # endpoint of one, middle of other
+             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
+              Segment2D(Point2D(1., 1., abs_tol=tol), Point2D(2., 2., abs_tol=tol)),
+              Point2D(1., 1., abs_tol=tol)),  # co-linear  intersecting endpoint
+             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
+              Segment2D(Point2D(1.1, 1.1, abs_tol=tol), Point2D(2., 2., abs_tol=tol)),
+              None),  # co-linear not intersecting
              ]
-    for line1, line2, intersection in tests:
+
+    for line1, line2, intersection, *args in tests:
+
+        print(line1, line2, intersection, args)
+        if len(args)>0:
+            import ipdb; ipdb.set_trace()
+
         if intersection is not None:
-            assert line1.intersect_line(line2).near(intersection), "Lines should intersect:  %s, %s  @(%s)" % (line1, line2, intersection)
+            assert line1.intersect_line(line2).near(intersection), "Lines should intersect:  %s, %s  @(%s)" % (
+                line1, line2, intersection)
         else:
             i_section = line1.intersect_line(line2)
             assert i_section is None, "Lines shouldn't intersect:  %s, %s  @(%s)" % (
                 line1, line2, i_section)
+
 
 def test_circle_intersect_line():
     pass
