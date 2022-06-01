@@ -32,12 +32,12 @@ class Point2D(object):
         self.x, self.y = float(x), float(y)
 
     def __str__(self):
-        return "(%i, %i)" % (self.x, self.y)
+        return "(%f, %f) (tol: +/-%f)" % (self.x, self.y, self.abs_tol)
 
     def near(self, other):
-        d= self.distance(other)
-        val= d < self.abs_tol
-        print("Comparing %s to %s -> %s" % (self, other, val))
+        d = self.distance(other)
+        val = d < self.abs_tol
+        # print("Comparing %s to %s -> %s" % (self, other, val))
         return val
 
     def distance(self, point):
@@ -94,13 +94,13 @@ class Segment2D(object):
         x0, x1 = self.p0.x, self.p1.x
         y0, y1 = self.p0.y, self.p1.y
 
-        # zero and one dimensional cases
-        if x1 == x0 and y1 == y0:
+        # lines are aligned with axes, handle explicitly
+        if x1 == x0 and y1 == y0:  # no line segment
             return p.near(self.p0)
-        elif x1 == x0:
-            return y0 <= p.y <= y1
-        elif y1 == y0:
-            return x0 <= p.x <= x1
+        elif x1 == x0:  # vertical line, point must be "close"
+            return np.abs(x1 - p.x) < p.abs_tol and y0 <= p.y <= y1
+        elif y1 == y0:  # horizontal line
+            return np.abs(y1 - p.y) < p.abs_tol and x0 <= p.x <= x1
 
         # the rest
         t0 = (p.x - x0) / (x1 - x0)
@@ -225,6 +225,7 @@ def polygon_encloses_point(polygon, point, max_tries=10000):
     """
     if any([point.near(vertex) for vertex in polygon.vertices]):
         return False
+
     if any([side.intersects_point(point) for side in polygon.sides]):
         return False
 
@@ -291,7 +292,7 @@ def max_inscribed_circle(corners):
         # condition 2
         segs = (corners - p.reshape(1, 2))
         sq_dists = np.sum(segs ** 2, axis=1)
-        print(sq_dists.dtype)
+
         error = sq_dists - r
         error[error < 0] = 0
         e += np.sum(error)
@@ -311,8 +312,8 @@ def max_inscribed_circle(corners):
     bounds = [(poly.bounds[0], poly.bounds[2]),
               (poly.bounds[1], poly.bounds[3]),
               (0.0, diag)]
-    print(bounds)
-    print(initial_guess, bounds)
+    # print(bounds)
+    # print(initial_guess, bounds)
     best = minimize(_inscribed_rad_err, x0=initial_guess, method='Powell')
 
     center, radius = np.array((best.x[0], best.x[1])), best.x[2]
@@ -333,7 +334,7 @@ def test_inscribed_circles():
             shape = make_random_shape()
             plot_polygon(shape, "-k")
             center, radius = max_inscribed_circle(shape)
-            print(center, radius)
+            # print(center, radius)
             inscribed_circle = get_polygon(np.ones(100) * radius)
             plot_polygon(inscribed_circle)
             plt.show()
@@ -361,57 +362,34 @@ def test_line_intersects_point():
     line1 = Segment2D(p0, p1)
     line2 = Segment2D(p0, p2)
 
-    tests = [{'line': line1,
-              'test_points': [Point2D(0., 0.), Point2D(1., 1.), Point2D(.2, .2),
-                              Point2D(.5, .5), Point2D(.7, .7), ],
-              'bad_points': [Point2D(.1, .2), Point2D(1.5, 1.5), Point2D(-.7, -.7), ]},
-             {'line': line2,
-              'test_points': [Point2D(0, 0), Point2D(0, 1), Point2D(0, .2),
-                              Point2D(0, .5), Point2D(0, .7), ],
-              'bad_points': [Point2D(0, .2), Point2D(0, 1.5), Point2D(0, -.7), ]}
-             ]
-    all_tests = []
-    for test in tests:
-        for test_point in test['test_points']:
-            # move good points slightly
-            tp_variants = [Point2D(test_point.x, test_point.y),
-                           Point2D(test_point.x, test_point.y + small),
-                           Point2D(test_point.x + small, test_point.y),
-                           Point2D(test_point.x + small, test_point.y + small)]
-            for tp in tp_variants:
-                all_tests.append((test['line'], tp, True))
-            # move good points a lot
+    points_near_line1 = [Point2D(.2, .2, abs_tol=tol),
+                         Point2D(.8 - small, .8, abs_tol=tol),
+                         Point2D(.2, .2 + small, abs_tol=tol),
+                         Point2D(.5 + small, .5 + small, abs_tol=tol)]
 
-            tp_variants = [Point2D(test_point.x, test_point.y),
-                           Point2D(test_point.x, test_point.y + big),
-                           Point2D(test_point.x + big, test_point.y),
-                           Point2D(test_point.x + big, test_point.y + big)]
-            for tp in tp_variants:
-                all_tests.append((test['line'], tp, False))
+    points_near_line2 = [Point2D(0, .2, abs_tol=tol),
+                         Point2D(0 - small, .8, abs_tol=tol),
+                         Point2D(0, .2 + small, abs_tol=tol),
+                         Point2D(0 + small, .5 + small, abs_tol=tol)]
 
-        for test_point in test['bad_points']:
-            # move bad points slightly
-            tp_variants = [Point2D(test_point.x, test_point.y),
-                           Point2D(test_point.x, test_point.y + small),
-                           Point2D(test_point.x + small, test_point.y),
-                           Point2D(test_point.x + small, test_point.y + small)]
-            for tp in tp_variants:
-                all_tests.append((test['line'], tp, False))
+    points_near_both = [Point2D(small, small, abs_tol=tol)]
+    points_near_neither = [Point2D(big, 0., abs_tol=tol)]
 
-            # move bad points a lot
-            tp_variants = [Point2D(test_point.x, test_point.y),
-                           Point2D(test_point.x, test_point.y + big),
-                           Point2D(test_point.x + big, test_point.y),
-                           Point2D(test_point.x + big, test_point.y + big)]
-            for tp in tp_variants:
-                all_tests.append((test['line'], tp, False))
-    for test in all_tests:
-        import ipdb;
-        ipdb.set_trace()
+    for p in points_near_both:
+        assert line1.intersects_point(p), "Incorrectly not intersecting:  %s  <--- %s" % (line1, p)
+        assert line2.intersects_point(p), "Incorrectly not intersecting:  %s  <--- %s" % (line2, p)
 
-        t = test[2] == test[0].intersects_point(test[1])
-        report = "%s, %s, %s" % (test[0], test[1], test[2])
-        assert t, "Failed test:  %s" % (report,)
+    for p in points_near_neither:
+        assert not line1.intersects_point(p), "Incorrectly intersecting:  %s  <--- %s" % (line1, p)
+        assert not line2.intersects_point(p), "Incorrectly intersecting:  %s  <--- %s" % (line2, p)
+
+    for p in points_near_line1:
+        assert line1.intersects_point(p), "Incorrectly not intersecting:  %s  <--- %s" % (line1, p)
+        assert not line2.intersects_point(p), "Incorrectly intersects:  %s  <--- %s" % (line2, p)
+
+    for p in points_near_line2:
+        assert line2.intersects_point(p), "Incorrectly not near:  %s  <--- %s" % (line2, p)
+        assert not line1.intersects_point(p), "Incorrectly near:  %s  <--- %s" % (line1, p)
 
 
 def test_line_intersect_line():
@@ -423,24 +401,24 @@ def test_circle_intersect_line():
 
 
 def test_points():
-    tol = Point2D(0, 0).abs_tol
+    tol = 1e-3
     big = tol * 100
     small = tol / 100
-    print("%f - %f"% (small,big))
 
-    p0 = Point2D(1, 1)
-    near = [Point2D(1, 1),
-            Point2D(1 + small, 1),
-            Point2D(1, 1 + small),
-            Point2D(1 + small, 1 + small)]
-    far = [Point2D(1 + big, 1),
-           Point2D(1, 1 + big),
-           Point2D(1 + big, 1 + big)]
+    p0 = Point2D(1, 1, abs_tol=tol)
+    near = [Point2D(1, 1, abs_tol=tol),
+            Point2D(1 + small, 1, abs_tol=tol),
+            Point2D(1, 1 + small, abs_tol=tol),
+            Point2D(1 + small, 1 + small, abs_tol=tol)]
+    far = [Point2D(1 + big, 1, abs_tol=tol),
+           Point2D(1, 1 + big, abs_tol=tol),
+           Point2D(1 + big, 1 + big, abs_tol=tol)]
+
     for far_point in far:
         assert not far_point.near(p0), "Incorrectly near:  %s,  %s" % (far_point, p0)
+
     for near_point in near:
-        print(" %s,  %s" % (near_point, p0))
-        assert not near_point.near(p0), "Incorrectly far:  %s,  %s" % (near_point, p0)
+        assert near_point.near(p0), "Incorrectly far:  %s,  %s" % (near_point, p0)
 
 
 def test_2d_geometry():
