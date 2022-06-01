@@ -127,6 +127,7 @@ class Segment2D(object):
             (-xa0 + xa1) * s + (xb0 -xb1) * t = (xb0 - xa0)   the "A" matrix for simult. eqns.
             (-ya0 + ya1) * s + (yb0 -yb1) * t = (yb0 - ya0)
         """
+        tol = np.max([self.p0.abs_tol, self.p1.abs_tol, other.p0.abs_tol, other.p1.abs_tol])
         if not lines_intersect(self.p0, self.p1, other.p0, other.p1):
             return None
         xa0, ya0 = self.p0.x, self.p0.y
@@ -140,12 +141,12 @@ class Segment2D(object):
         b = np.array([[xb0 - xa0],
                       [yb0 - ya0]])
 
-        st = np.dot(np.linalg.solve(a), b)
+        st = np.linalg.solve(a, b)
         p0 = self.interpolate(st[0])
         p1 = self.interpolate(st[1])
         dist = Segment2D(p0, p1).length
         mean_length = np.mean([self.length, other.length])
-        assert (dist / mean_length < 1e-6), "Error calculating intersection"
+        assert (dist / mean_length < tol), "Error calculating intersection"
         return p0
 
 
@@ -298,7 +299,7 @@ def max_inscribed_circle(corners):
         e += np.sum(error)
 
         # condition 3
-        chords = [circle.intersect(side) for side in poly.sides]
+        chords = [circle.intersect_line(side) for side in poly.sides]
         e += np.sum([chord.length for chord in chords])
 
         return e - r
@@ -393,8 +394,23 @@ def test_line_intersects_point():
 
 
 def test_line_intersect_line():
-    pass
-
+    """
+    Check: inteserecting, parallel, lines that would intersect but are too short, also parallel to axes
+    """
+    tol = 1e-6
+    big = tol * 100
+    small = tol / 100
+    tests = [(Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
+              Segment2D(Point2D(1., 0., abs_tol=tol), Point2D(0., 1., abs_tol=tol)),
+              Point2D(0.5, 0.5, abs_tol=tol)),
+             ]
+    for line1, line2, intersection in tests:
+        if intersection is not None:
+            assert line1.intersect_line(line2).near(intersection), "Lines should intersect:  %s, %s  @(%s)" % (line1, line2, intersection)
+        else:
+            i_section = line1.intersect_line(line2)
+            assert i_section is None, "Lines shouldn't intersect:  %s, %s  @(%s)" % (
+                line1, line2, i_section)
 
 def test_circle_intersect_line():
     pass
