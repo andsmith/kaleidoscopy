@@ -4,20 +4,12 @@ import os
 import numpy as np
 import cv2
 from scipy.interpolate import griddata
-# import matplotlib.pylab as plt
-#import matplotlib.cm as cm
-#from mpl_toolkits.mplot3d import Axes3D
-#from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import matplotlib.pylab as plt
+# import matplotlib.cm as cm
+# from mpl_toolkits.mplot3d import Axes3D
+# from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from scipy.optimize import minimize
 
-#####
-## https://bryceboe.com/2006/10/23/line-segment-intersection-algorithm/
-
-def ccw(A, B, C):
-    return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x)
-
-def lines_intersect(A, B, C, D):
-    return ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D)
-####
 
 class Image(object):
     """
@@ -157,81 +149,6 @@ class Image(object):
         self._img = image
 
 
-class TextManager(object):
-    """
-    For adding text to output streams.
-    "Set it and forget it" -- add text with expiration times, etc.
-    """
-
-    def __init__(self):
-        self._items = []
-
-    def add_text(self, text, pos, age=0, font=cv2.FONT_HERSHEY_PLAIN, font_scale=1, color=(255, 255, 255),
-                 thickness=1, linestyle=cv2.LINE_AA):
-        """
-        Most args are for cv2 puttext.
-        :param text: string
-        :param pos: (row, col)
-        :param age: 0 for indefinite, or seconds, or -1 for just once
-        :param font: cv2 param
-        :param font_scale: cv2 param
-        :param color: cv2 param
-        :param thickness: cv2 param
-        :param linestyle: cv2 param
-        :return: index, used to delete before expiration
-        """
-        t = {'text': text,
-             'pos': pos,
-             'fontScale': font_scale,
-             'font': font,
-             'color': color,
-             'thickness': thickness,
-             'linestyle': linestyle,
-             'age': age,
-             'start': time.time()
-             }
-        (w, h), _ = cv2.getTextSize(t['text'], t['font'], t['fontScale'], t['thickness'])
-        self._items.append(t)
-        return w, h
-
-    def add_lines(self, lines, pos, leading=0.4, *args, **kwargs):
-        """
-        Put multiple lines.
-        :param lines:  list of text lines
-        :param pos: lower left corner of first line of text
-        :param leading: spacing of lines
-        :param args:  additional args to add_text
-        :param kwargs: additional args to add_text
-        :return:  lower left corner of last line of text
-        """
-
-        px = pos[0]
-        py = pos[1]
-        for line in lines:
-            _, h = self.add_text(line, (px, py), *args, **kwargs)
-            py += int(float(h) * (1.0 + leading))
-        return py
-
-    def remove(self, item):
-        self._items.pop(item)
-
-    def _check_ages(self):
-        valid = [i for i in self._items if i['age'] <= 0 or time.time() - i['start'] < i['age']]
-        self._items = valid
-
-    def render(self, img):
-
-        self._check_ages()
-
-        image = img.copy()
-        for t in self._items:
-            image = cv2.putText(image, t['text'], t['pos'], t['font'], t['fontScale'], t['color'], t['thickness'],
-                                t['linestyle'])
-        singles_removed = [i for i in self._items if i['age'] >= 0]
-        self._items = singles_removed
-        return image
-
-
 def get_index_grid(img_shape, grid_shape):
     r = np.linspace(0, img_shape[0] - 1, grid_shape[0] + 1).astype(np.int64)
     c = np.linspace(0, img_shape[1] - 1, grid_shape[1] + 1).astype(np.int64)
@@ -260,26 +177,6 @@ def check_make_dir(path, uniquify=False):
     return path
 
 
-def test_image():
-    pic = Image.from_file('test_img.jpg')
-
-
-def test_text_manager():
-    tm = TextManager()
-    img = np.zeros(500 * 350 * 3, dtype=np.uint8).reshape((350, 500, 3))
-    tm.add_text("blah", (100, 30))
-    tm.add_lines(['This', 'is', "a test."], (300, 60))
-    """
-    import matplotlib.pylab as plt
-    plt.imshow(tm.render(img))
-    plt.show()
-    """
-
-
-if __name__ == "__main__":
-    test_text_manager()
-
-
 def make_bounds(coords):
     max_vals = np.max(coords, axis=0)
     min_vals = np.min(coords, axis=0)
@@ -287,3 +184,8 @@ def make_bounds(coords):
             'bottom': min_vals[1],
             'left': min_vals[0],
             'right': max_vals[0]}
+
+
+def test_image():
+    pic = Image.from_file('test_img.jpg')
+

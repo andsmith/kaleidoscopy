@@ -30,29 +30,38 @@ class KScopyApp(object):
     _OSD_ALPHA = 0.65
     _FPS_PERIOD_SEC = 2.0
 
-    def __init__(self):
+    def __init__(self, output_shape=(300, 500)):
         self._in_frame = None
         self._in_frame_time = None
         self._out_frame = None
         self._out_frame_time = None
         self._last_frame_time = None
+        self._output_res = output_shape
         self._icon_size = 200
+
         self._window_name = "Kaleidoscopy"
         self._state = KScopeState.setup
-        self._app_flow_lock = Lock()
+        # self._app_flow_lock = Lock()
         self._waiter = Event()
+
         self._OSD_on = True
         self._k_map = None  # stores current input-output mapping of pixels, bounce counts, distance traveled, etc.
         self._render_stats = None
         self._raytracing_stats = None
 
-        self._hotkeys = [{'key': ' ', 'desc': 'Help', 'func': self._toggle_osd,
+        self._hotkeys = [{'key': ' ',
+                          'desc': 'Help',
+                          'func': self._toggle_osd,
                           'txt': "SPACE - toggle this on-screen display."},
 
-                         {'key': 'q', 'desc': 'Quit', 'func': self._shutdown,
+                         {'key': 'q',
+                          'desc': 'Quit',
+                          'func': self._shutdown,
                           'txt': "Q - Quit."}]
+
         self._last_frame_complete_time = None
         self._idle_pct_sum = 0
+
         self._fps = {'n_in': 0,
                      'n_out': 0,
                      'n_dropped': 0,
@@ -68,9 +77,9 @@ class KScopyApp(object):
         # start
         try:
             if False:  # TEMP DEBUG
-                with self._app_flow_lock:
-                    self._cam_ind = pick_camera()
-                    self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=True)
+                # with self._app_flow_lock:
+                self._cam_ind = pick_camera()
+                self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=True)
             else:
                 self._cam_ind = 0
                 self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=False)
@@ -89,8 +98,17 @@ class KScopyApp(object):
 
             # User shapes mirror parameters
             self._user_shape_mirrors()
+            """
+            self,
+                 mirrors,
+                 img_shape,
+                 update_callback,
+                 n_cores=0,
+                 fov_deg_x=30.0):
+                 """
             self._ray_tracer = RayTracer(mirrors=self._mirrors,
-                                         target_resolution=self._resolution,
+                                         output_shape=self._resolution,
+                                         target_shape=self._resolution,
                                          update_callback=self._update_k_map)
 
             # Start raytracing and rendering
@@ -174,10 +192,11 @@ class KScopyApp(object):
 
         # calc cpu workload %
         finish_time = time.perf_counter()
-        elapsed = finish_time - self._last_frame_complete_time
-        working_time = finish_time - start_time
-        idle = working_time / elapsed
-        self._idle_pct_sum += idle * 100.0
+        if self._last_frame_complete_time is not None:
+            elapsed = finish_time - self._last_frame_complete_time
+            working_time = finish_time - start_time
+            idle = working_time / elapsed
+            self._idle_pct_sum += idle * 100.0
 
         self._last_frame_complete_time = finish_time
 
@@ -235,9 +254,9 @@ class KScopyApp(object):
             self._pending_mouse_callback = None
 
     def _render(self, frame):
-        if self._k_map is None:
-            self._ray_tracer.get_current_map()
-        out_frame = self._renderer.render(frame, self._k_map['mapping'])
+        #if self._k_map is None:
+        ##    self._ray_tracer.get_current_map()
+        #out_frame = self._renderer.render(frame, self._k_map['mapping'])
         return frame.copy()
 
     def _update_osd_info(self):
@@ -272,18 +291,9 @@ class KScopyApp(object):
             self._status_bar.remove_msg('render_stats')
 
 
-def thread_monitor():
-    start = time.time()
-    while start + 5.0 > time.time():
-        time.sleep(1)
-        for thread in enumerate():
-            print("%s - %s - %s" % (get_ident(), thread.ident, thread.name))
-
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # t1 = Thread(target=thread_monitor)
-    # t1.start()
+
     scope = KScopyApp()
     # _test_kscope_diagrams()
     # scope.view_live(0)
