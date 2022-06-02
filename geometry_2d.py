@@ -250,10 +250,13 @@ class Circle(object):
 
         x0, x1 = seg.p0.x, seg.p1.x
         y0, y1 = seg.p0.y, seg.p1.y
-        a = (x1 - x0) ** 2. + (y1 - y0) ** 2.
-        b = (x0 * (x1 - x0) + y0 * (y1 - y0))
-        c = (x0 - self.x) ** 2. + (y0 - self.y) ** 2. - self.r ** 2.
-        t = -b / (2.0 * a)
+        xc, yc = self.x, self.y
+        r = self.r
+
+        a = (x0 ** 2. - 2. * x0 * x1 + x1 ** 2. + y0 ** 2. - 2. * y0 * y1 + y1 ** 2.)
+        b = (-2. * x0 ** 2. - 2. * x1 * xc - 2. * y0 ** 2. - 2. * y1 * yc)
+        c = (x0 ** 2. + 2. * x0 * xc + xc ** 2. + y0 ** 2. + 2. * y0 * yc + yc ** 2. - r ** 2.)
+        t = -b / (2. * a)
 
         disc = b ** 2. - 4. * a * c
 
