@@ -26,13 +26,16 @@ def make_random_shape():
     return get_polygon(vertex_distances)
 
 
-class Point2D(object):
+class Point(object):
     def __init__(self, x, y, abs_tol=1e-10):
         self.abs_tol = abs_tol
         self.x, self.y = float(x), float(y)
 
+    def plot(self, *args, **kwargs):
+        plt.plot(self.x, self.y, *args, **kwargs)
+
     def __str__(self):
-        return "(%f, %f) (tol: +/-%f)" % (self.x, self.y, self.abs_tol)
+        return "Point(%f, %f)" % (self.x, self.y)
 
     def near(self, other):
         d = self.distance(other)
@@ -58,27 +61,33 @@ def lines_intersect(A, B, C, D):
 ####
 
 
-class Segment2D(object):
+class Segment(object):
     def __init__(self, p0, p1):
         self.p0, self.p1 = p0, p1
         self.length = p0.distance(p1)
 
-    def __str__(self):
-        return "%s--%s" % (self.p0, self.p1)
+    def plot(self, *args, **kwargs):
+        plt.plot([self.p0.x, self.p1.x], [self.p0.y, self.p1.y], *args, **kwargs)
 
-    def interpolate(self, t):
+    def __str__(self):
+        return "Line(start=%s, end=%s)" % (self.p0, self.p1)
+
+    def interpolate(self, t, check_bounds=True):
         """
         linearly interpolate, between p0 at t=0 and p1 at t=1
         """
-        if not 0. <= t <= 1.:
+        if check_bounds and not 0. <= t <= 1.:
             raise Exception("Line parameter must be in [0,1].")
         x = self.p0.x * (1.0 - t) + self.p1.x * t
         y = self.p0.y * (1.0 - t) + self.p1.y * t
-        return Point2D(x, y)
+        return Point(x, y)
+
+    def colinear(self, p):
+        return False
 
     def intersects_point(self, p):
         """
-           Return true, if within point._rel_tol.
+           Return true, if within point._rel_tol of the line
 
            Math:  using parametric form for segment parameterized by t,
              solve for p (if possible)
@@ -94,7 +103,7 @@ class Segment2D(object):
         x0, x1 = self.p0.x, self.p1.x
         y0, y1 = self.p0.y, self.p1.y
 
-        # lines are aligned with axes, handle explicitly
+        # lines are aligned with axes, handle explicitly to avoid divide by 0 in the general case
         if x1 == x0 and y1 == y0:  # no line segment
             return p.near(self.p0)
         elif x1 == x0:  # vertical line, point must be "close"
@@ -102,18 +111,24 @@ class Segment2D(object):
         elif y1 == y0:  # horizontal line
             return np.abs(y1 - p.y) < p.abs_tol and x0 <= p.x <= x1
 
-        # the rest
+        # the general case
         t0 = (p.x - x0) / (x1 - x0)
         t1 = (p.y - y0) / (y1 - y0)
-        p0 = Point2D(x0 * (1. - t0) + x1 * t0,
-                     y0 * (1. - t0) + x1 * t0, abs_tol=p.abs_tol)
-        p1 = Point2D(x0 * (1. - t1) + x1 * t1,
-                     y0 * (1. - t1) + x1 * t1, abs_tol=p.abs_tol)
+
+        if not 0. - p.abs_tol < t0 < 1. + p.abs_tol:
+            # parameter t is not in unit interval, no intersection
+            return False
+
+        p0 = Point(x0 * (1. - t0) + x1 * t0,
+                   y0 * (1. - t0) + x1 * t0, abs_tol=p.abs_tol)
+        p1 = Point(x0 * (1. - t1) + x1 * t1,
+                   y0 * (1. - t1) + x1 * t1, abs_tol=p.abs_tol)
+
         return p0.near(p1)
 
     def intersect_line(self, other):
         """
-        Return Point2D of intersection, or None if non-intersecting/crossing segments.
+        Return Point of intersection, or None if non-intersecting/crossing segments.
 
         Math:  using parametric form for segments a and b, parameterized by s and t,
           solve simultaneously for s and t
@@ -128,6 +143,29 @@ class Segment2D(object):
             (-ya0 + ya1) * s + (yb0 -yb1) * t = (yb0 - ya0)
         """
         tol = np.max([self.p0.abs_tol, self.p1.abs_tol, other.p0.abs_tol, other.p1.abs_tol])
+
+        # special cases:
+        def _check_colinearity(line, point):
+            if line.intersects_point(point):
+                return point
+            return None
+
+        colinearities = list()
+        colinearities.append(_check_colinearity(self, other.p0))
+        colinearities.append(_check_colinearity(self, other.p1))
+        colinearities.append(_check_colinearity(other, self.p0))
+        colinearities.append(_check_colinearity(other, self.p1))
+        colinearities = [c for c in colinearities if c is not None]
+        if len(colinearities) > 0:
+            return colinearities[0]
+
+        if self.colinear(other.p0):
+            if self.intersects_point(other.p0):
+                return other.p0
+        if self.colinear(other.p1):
+            if self.intersects_point(other.p1):
+                return other.p1
+
         if not lines_intersect(self.p0, self.p1, other.p0, other.p1):
             return None
         xa0, ya0 = self.p0.x, self.p0.y
@@ -144,24 +182,24 @@ class Segment2D(object):
         st = np.linalg.solve(a, b)
         p0 = self.interpolate(st[0])
         p1 = self.interpolate(st[1])
-        dist = Segment2D(p0, p1).length
+        dist = Segment(p0, p1).length
         mean_length = np.mean([self.length, other.length])
         assert (dist / mean_length < tol), "Error calculating intersection"
         return p0
 
 
-class Polygon2D(object):
+class Polygon(object):
     def __init__(self, corners):
-        if not isinstance(corners[0], Point2D):
-            self.vertices = [Point2D(corner[0], corner[1]) for corner in corners]
+        if not isinstance(corners[0], Point):
+            self.vertices = [Point(corner[0], corner[1]) for corner in corners]
         else:
             self.vertices = corners
         self.n = len(self.vertices)
         verts = np.array([(c.x, c.y) for c in corners])
         self.bounds = [np.min(verts[:, 0]), np.min(verts[:, 1]),
                        np.max(verts[:, 0]), np.max(verts[:, 1])]
-        self.sides = [Segment2D(self.vertices[i], self.vertices[i + 1]) for i in range(self.n - 1)]
-        self.sides.append(Segment2D(self.vertices[0], self.vertices[-1]))
+        self.sides = [Segment(self.vertices[i], self.vertices[i + 1]) for i in range(self.n - 1)]
+        self.sides.append(Segment(self.vertices[0], self.vertices[-1]))
 
     def get_sides(self):
         sides = [np.hstack([self.vertices[i], self.vertices[i + 1]]) for i in range(self.n - 1)]
@@ -171,18 +209,29 @@ class Polygon2D(object):
 
 class Circle(object):
     def __init__(self, center, radius):
+        if not isinstance(center, Point):
+            center = Point(center[0], center[1])
         self.x = center.x
         self.y = center.y
         self.center = center
         self.r = radius
 
-    def intersect_line(self, line):
+    def __str__(self):
+        return "Circle(center=%s, radius=%f)" % (self.center, self.r)
+
+    def plot(self, *args, **kwargs):
+        n_samples = 100
+        theta = np.linspace(0.0, np.pi * 2.0, n_samples)
+        x, y = self.x + np.cos(theta) * self.r, self.y + np.sin(theta) * self.r
+        plt.plot(x, y, *args, **kwargs)
+
+    def intersect_line(self, seg):
         """
-        Return Point2d, Segment2d, or None depending on intersection, etc.
+        Return Point, Segment, or None depending on intersection, etc.
         math, using parametric form of line & implicit form of circle:
-            line: [x(t), y(t)] for x(t) = x0 (1-t) + x1 (t) and 0 <= t <=1 etc.
+            line: [x(t), y(t)] for x(t) = x0 (1-t) + x1 (t) and 0 <= t <=1, similarly for y
             circle: (x-xc)^2 + (y-yc)^2 = r^2
-            intersection: (x(t)-xc)^2 + (y(t)-yc)^2 = r^2, solve for t:
+            intersection: (x(t)-xc)^2 + (y(t)-yc)^2 = r^2, (substituting) solve for t:
                 (x0 + (x1 - x0) t - xc) ^ 2 +(y0 + (y1 - y0 ) t - yc) ^ 2 = r^2
                 (x0-xc)^2 + x0(x1-x0) t +(x1-x0)^2 t^2 + (y0-yc)^2 + y0(y1-y0) t + (y1-y0)^2 t^2 = r^2
                 ((x1-x0)^2 + (y1-y0)^2) t^2 + (x0(x1-x0) + y0(y1-y0)) * t + (x0-xc)^2 + (y0-yc)^2 - r^2 = 0
@@ -193,24 +242,49 @@ class Circle(object):
                 if b^2-4ac is negative, no intersection,
                 if zero, single intersection,
                 otherwise, line segment defined by the two solutions (plugged into line equation)
+
+        :param seg:  Segment() object which may intersect circle
+        :param extend_interior_segments:  if one or both endpoints are inside the circle, extend the
+            segment until it intersects the circle.
         """
 
-        x0, x1 = line.p0.x, line.p1.x
-        y0, y1 = line.p0.y, line.p1.y
+        x0, x1 = seg.p0.x, seg.p1.x
+        y0, y1 = seg.p0.y, seg.p1.y
         a = (x1 - x0) ** 2. + (y1 - y0) ** 2.
         b = (x0 * (x1 - x0) + y0 * (y1 - y0))
         c = (x0 - self.x) ** 2. + (y0 - self.y) ** 2. - self.r ** 2.
         t = -b / (2.0 * a)
 
         disc = b ** 2. - 4. * a * c
-        if disc < 0:
+
+        if disc < 0:  ### should use tol here?
+            # no solutions, line does not intersect circle
             return None
         elif disc == 0:
-            return line.interpolate(t)
+            # single solution, line is tangent to circle, intersection may be in circle
+            if 0 < t < 1:
+                return seg.interpolate(t)
+            return None
+        else:
+            # two solutions, line intersects circle in 2 places
+            t0 = t - np.sqrt(disc)
+            t1 = t + np.sqrt(disc)
 
-        t0 = t - np.sqrt(disc)
-        t1 = t + np.sqrt(disc)
-        return Segment2D(line.interpolate(t0), line.interpolate(t1))
+        # The line crosses the circle, but maybe not all of the line, so the intersection
+        # may need to be shortened. Circle is the (  ) and the line is 0----1, i.e. p0 to p1.
+
+        if t0 > 1 and t1 > 1:  # 0--1 (    )        no intersection t0, t1 > 1
+            return None
+        elif t0 > 0 and t1 > 0:  # 0----(-1  )        intersection t1 > 1
+            return Segment(seg.interpolate(t0), seg.p1)
+        elif t0 > 0 and t1 > 0:  # 0----(----)-1      intersection
+            return Segment(seg.interpolate(t0), seg.interpolate(t1))
+        elif t0 > 0 and t1 > 0:  # ( 0--1 )     interior "intersection" 0 < t0, t1 < 1
+            return Segment(seg.p0, seg.p1)
+        elif t0 > 0 and t1 > 0:  # ( 0--)-1      intersection t0 < 0
+            return Segment(seg.p0, seg.interpolate(t1))
+        else:  # t0 > 0 and t1 > 0:  # (    ) 0--1   no intersection, t0, t1 < 0
+            return None
 
 
 def polygon_encloses_point(polygon, point, max_tries=10000):
@@ -231,9 +305,9 @@ def polygon_encloses_point(polygon, point, max_tries=10000):
         return False
 
     for _ in range(max_tries):
-        p_far = Point2D(polygon.bounds[0] - 1.0 - np.random.rand(1)[0],
-                        polygon.bounds[1] - 1.0 - np.random.rand(1)[0], abs_tol=point.abs_tol)  # outside bounding box
-        ray = Segment2D(point, p_far)
+        p_far = Point(polygon.bounds[0] - 1.0 - np.random.rand(1)[0],
+                      polygon.bounds[1] - 1.0 - np.random.rand(1)[0], abs_tol=point.abs_tol)  # outside bounding box
+        ray = Segment(point, p_far)
         vertex_intersections = [ray.intersects_point(v) for v in polygon.vertices]
         if any(vertex_intersections):
             continue
@@ -248,13 +322,13 @@ def rand_interior_point(polygon, max_tries=1000000):
     """
     Return a point inside the polygon (at random), or raises exception
     :param polygon:  sympy.geometry.Polygon object
-    :returns: Point2D object
+    :returns: Point object
     """
     x_span = polygon.bounds[2] - polygon.bounds[0]
     y_span = polygon.bounds[3] - polygon.bounds[1]
     for _ in range(max_tries):
-        p = Point2D((np.random.rand(1)[0] - polygon.bounds[0]) * x_span + polygon.bounds[0],
-                    (np.random.rand(1)[0] - polygon.bounds[1]) * y_span + polygon.bounds[1], )
+        p = Point((np.random.rand(1)[0] - polygon.bounds[0]) * x_span + polygon.bounds[0],
+                  (np.random.rand(1)[0] - polygon.bounds[1]) * y_span + polygon.bounds[1], )
         if polygon_encloses_point(polygon, p):
             return p
     raise Exception("Couldn't find interior point!  Does polygon have small area?")
@@ -266,7 +340,7 @@ def max_inscribed_circle(corners):
     :param polygon:  Nx2  of polygon corners
     :returns:  (x,y) center, r radius
     """
-    poly = Polygon2D(corners)
+    poly = Polygon(corners)
     interior_point = rand_interior_point(poly)
     exterior_penalty = 100.0
 
@@ -282,7 +356,7 @@ def max_inscribed_circle(corners):
         """
         x, y, r = circle_params
         e = 0.0
-        point = Point2D(x, y)
+        point = Point(x, y)
         circle = Circle(point, r)
         p = np.array([x, y])
 
@@ -305,8 +379,8 @@ def max_inscribed_circle(corners):
         return e - r
 
     small_spread = np.sum(np.sqrt(np.diag(np.cov(corners.T)))) / 50.0  # sum of x & y st. dev.
-    diag = float(Segment2D(Point2D(poly.bounds[0], poly.bounds[1]),
-                           Point2D(poly.bounds[2], poly.bounds[3])).length)
+    diag = float(Segment(Point(poly.bounds[0], poly.bounds[1]),
+                         Point(poly.bounds[2], poly.bounds[3])).length)
     initial_guess = (float(interior_point.x),
                      float(interior_point.y),
                      small_spread)
@@ -319,159 +393,3 @@ def max_inscribed_circle(corners):
 
     center, radius = np.array((best.x[0], best.x[1])), best.x[2]
     return center, radius
-
-
-def plot_polygon(corners, *args, **kwargs):
-    x = np.hstack([corners[:, 0], corners[0, 0]])
-    y = np.hstack([corners[:, 1], corners[0, 1]])
-    plt.plot(x, y, *args, **kwargs)
-
-
-def test_inscribed_circles():
-    n = 1
-    for r in range(5):
-        for c in range(5):
-            # plt.subplot(5,5,n)
-            shape = make_random_shape()
-            plot_polygon(shape, "-k")
-            center, radius = max_inscribed_circle(shape)
-            # print(center, radius)
-            inscribed_circle = get_polygon(np.ones(100) * radius)
-            plot_polygon(inscribed_circle)
-            plt.show()
-            # plt.fill(center.reshape(1,2)+get_polygon(np.ones(100)*radius))
-            n += 1
-    plt.show()
-
-
-def get_polygon(radii):
-    theta = np.linspace(0.0, 2. * np.pi, radii.size + 1)[:-1]
-    points = np.vstack([radii * np.cos(theta),
-                        radii * np.sin(theta)]).T
-    return points
-
-
-def test_line_intersects_point():
-    tol = 1e-4
-    big = 1e-3
-    small = 1e-5
-
-    p0 = Point2D(0., 0., abs_tol=tol)
-    p1 = Point2D(1., 1., abs_tol=tol)
-    p2 = Point2D(0., 1., abs_tol=tol)
-
-    line1 = Segment2D(p0, p1)
-    line2 = Segment2D(p0, p2)
-
-    points_near_line1 = [Point2D(.2, .2, abs_tol=tol),
-                         Point2D(.8 - small, .8, abs_tol=tol),
-                         Point2D(.2, .2 + small, abs_tol=tol),
-                         Point2D(.5 + small, .5 + small, abs_tol=tol)]
-
-    points_near_line2 = [Point2D(0, .2, abs_tol=tol),
-                         Point2D(0 - small, .8, abs_tol=tol),
-                         Point2D(0, .2 + small, abs_tol=tol),
-                         Point2D(0 + small, .5 + small, abs_tol=tol)]
-
-    points_near_both = [Point2D(small, small, abs_tol=tol)]
-    points_near_neither = [Point2D(big, 0., abs_tol=tol)]
-
-    for p in points_near_both:
-        assert line1.intersects_point(p), "Incorrectly not intersecting:  %s  <--- %s" % (line1, p)
-        assert line2.intersects_point(p), "Incorrectly not intersecting:  %s  <--- %s" % (line2, p)
-
-    for p in points_near_neither:
-        assert not line1.intersects_point(p), "Incorrectly intersecting:  %s  <--- %s" % (line1, p)
-        assert not line2.intersects_point(p), "Incorrectly intersecting:  %s  <--- %s" % (line2, p)
-
-    for p in points_near_line1:
-        assert line1.intersects_point(p), "Incorrectly not intersecting:  %s  <--- %s" % (line1, p)
-        assert not line2.intersects_point(p), "Incorrectly intersects:  %s  <--- %s" % (line2, p)
-
-    for p in points_near_line2:
-        assert line2.intersects_point(p), "Incorrectly not near:  %s  <--- %s" % (line2, p)
-        assert not line1.intersects_point(p), "Incorrectly near:  %s  <--- %s" % (line1, p)
-
-
-def test_line_intersect_line():
-    """
-    Check: inteserecting, parallel, lines that would intersect but are too short, also parallel to axes
-    """
-    tol = 1e-6
-    big = tol * 100
-    small = tol / 100
-
-    tests = [(Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
-              Segment2D(Point2D(1., 0., abs_tol=tol), Point2D(0., 1., abs_tol=tol)),
-              Point2D(0.5, 0.5, abs_tol=tol)),  # intersecting
-             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
-              Segment2D(Point2D(0.1, 0.2, abs_tol=tol), Point2D(1.1, 1.2, abs_tol=tol)),
-              None),  # parallel
-             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
-              Segment2D(Point2D(1., 0., abs_tol=tol), Point2D(0.6, 0.4, abs_tol=tol)),
-              None),  # not parallel, but not intersecting
-             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
-              Segment2D(Point2D(1., 1., abs_tol=tol), Point2D(2., 0., abs_tol=tol)),
-              Point2D(0.5, 0.5, abs_tol=tol),0),  # shared endpoint intersection
-             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
-              Segment2D(Point2D(1., 0., abs_tol=tol), Point2D(0.5, 0.5, abs_tol=tol)),
-              Point2D(0.5, 0.5, abs_tol=tol)),  # endpoint of one, middle of other
-             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
-              Segment2D(Point2D(1., 1., abs_tol=tol), Point2D(2., 2., abs_tol=tol)),
-              Point2D(1., 1., abs_tol=tol)),  # co-linear  intersecting endpoint
-             (Segment2D(Point2D(0., 0., abs_tol=tol), Point2D(1., 1., abs_tol=tol)),
-              Segment2D(Point2D(1.1, 1.1, abs_tol=tol), Point2D(2., 2., abs_tol=tol)),
-              None),  # co-linear not intersecting
-             ]
-
-    for line1, line2, intersection, *args in tests:
-
-        print(line1, line2, intersection, args)
-        if len(args)>0:
-            import ipdb; ipdb.set_trace()
-
-        if intersection is not None:
-            assert line1.intersect_line(line2).near(intersection), "Lines should intersect:  %s, %s  @(%s)" % (
-                line1, line2, intersection)
-        else:
-            i_section = line1.intersect_line(line2)
-            assert i_section is None, "Lines shouldn't intersect:  %s, %s  @(%s)" % (
-                line1, line2, i_section)
-
-
-def test_circle_intersect_line():
-    pass
-
-
-def test_points():
-    tol = 1e-3
-    big = tol * 100
-    small = tol / 100
-
-    p0 = Point2D(1, 1, abs_tol=tol)
-    near = [Point2D(1, 1, abs_tol=tol),
-            Point2D(1 + small, 1, abs_tol=tol),
-            Point2D(1, 1 + small, abs_tol=tol),
-            Point2D(1 + small, 1 + small, abs_tol=tol)]
-    far = [Point2D(1 + big, 1, abs_tol=tol),
-           Point2D(1, 1 + big, abs_tol=tol),
-           Point2D(1 + big, 1 + big, abs_tol=tol)]
-
-    for far_point in far:
-        assert not far_point.near(p0), "Incorrectly near:  %s,  %s" % (far_point, p0)
-
-    for near_point in near:
-        assert near_point.near(p0), "Incorrectly far:  %s,  %s" % (near_point, p0)
-
-
-def test_2d_geometry():
-    test_points()
-    test_line_intersects_point()
-    test_line_intersect_line()
-    test_circle_intersect_line()
-    logging.info("Passed all tests")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    test_2d_geometry()
