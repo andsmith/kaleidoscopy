@@ -47,8 +47,14 @@ class CirclePrism(MirrorPrism):
     def get_icon_vertices(cls):
         top_y = super().ICON_LAYOUT['fig_top_y']
         bottom_y = super().ICON_LAYOUT['fig_bottom_y']
-        diameter = top_y - bottom_y
-        points = CirclePrism().get_rel_shape(n_approx=1000)
+        radius = (top_y - bottom_y) / 2.
+        center_y = (top_y + bottom_y) / 2
+        center_x = 0.5
+        t = np.linspace(0., np.pi * 2., 1000)
+
+        points = np.stack([np.cos(t) * radius, np.sin(t) * radius], axis=1) + \
+                 np.array((center_x, center_y)).reshape(1, 2)
+
 
         text_y = super().ICON_LAYOUT['text_bottom_y']
         return {'points': points,
