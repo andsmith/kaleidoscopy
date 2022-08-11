@@ -31,11 +31,6 @@ class KScopyApp(object):
     _FPS_PERIOD_SEC = 2.0
 
     def __init__(self, output_shape=(300, 500)):
-        self._in_frame = None
-        self._in_frame_time = None
-        self._out_frame = None
-        self._out_frame_time = None
-        self._last_frame_time = None
         self._output_res = output_shape
         self._icon_size = 200
 
@@ -59,101 +54,52 @@ class KScopyApp(object):
                           'func': self._shutdown,
                           'txt': "Q - Quit."}]
 
-        self._last_frame_complete_time = None
-        self._idle_pct_sum = 0
-
-        self._fps = {'n_in': 0,
-                     'n_out': 0,
-                     'n_dropped': 0,
-                     'fps % sum': 0.0,
-                     'last_update_time': time.time() - self._FPS_PERIOD_SEC - 1.0,
-                     'fps_in': 0,
-                     'fps_out': 0,
-                     'fps_drop': 0,
-                     'fps_idle_pct': 0.0}
-
-        self._drop_frame_lock = Lock()
-
+        #self._drop_frame_lock = Lock()
+        #try:
         # start
-        try:
-            if False:  # TEMP DEBUG
-                # with self._app_flow_lock:
-                self._cam_ind = pick_camera()
-                self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=True)
-            else:
-                self._cam_ind = 0
-                self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=False)
+        if False:  ### TEMP DEBUG
+            # with self._app_flow_lock:
+            self._cam_ind = pick_camera()
+            self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=True)
+        else:
+            self._cam_ind = 0
+            self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=False)
 
-            # User chooses type of scope
-            self._ray_tracer = None
-            self._mirror_type = self._user_pick_shape()
-            self._mirrors = self._mirror_type()
-            self._cam.start()
-            self._resolution = self._cam.get_resolution(wait=True)
-            image_shape = (self._resolution[1], self._resolution[0], 3)
-            self._status_bar = StatusMessages(image_shape, self._OSD_TEXT_COLOR,
-                                              self._OSD_BKG_COLOR,
-                                              bkg_alpha=self._OSD_ALPHA, spacing=10, max_font_scale=1.0)
-            self._renderer = ImageMapper(self._resolution)
+        # User chooses type of scope
+        self._ray_tracer = None
+        self._mirror_type = self._user_pick_shape()
+        self._mirrors = self._mirror_type()
+        self._cam.start()
+        self._resolution = self._cam.get_resolution(wait=True)
+        image_shape = self._resolution[1], self._resolution[0]
+        self._status_bar = StatusMessages(image_shape, self._OSD_TEXT_COLOR,
+                                            self._OSD_BKG_COLOR,
+                                            bkg_alpha=self._OSD_ALPHA, spacing=10, max_font_scale=1.0)
+        self._renderer = ImageMapper(self._resolution)
 
-            # User shapes mirror parameters
-            self._user_shape_mirrors()
-            """
-            self,
-                 mirrors,
-                 img_shape,
-                 update_callback,
-                 n_cores=0,
-                 fov_deg_x=30.0):
-                 """
-            self._ray_tracer = RayTracer(mirrors=self._mirrors,
-                                         output_shape=self._resolution,
-                                         target_shape=self._resolution,
-                                         update_callback=self._update_k_map)
+        # User shapes mirror parameters
+        self._user_shape_mirrors()
+        self._ray_tracer = RayTracer(mirrors=self._mirrors,
+                                        output_shape=self._resolution,
+                                        target_shape=self._resolution,
+                                        update_callback=self._update_k_map)
 
-            # Start raytracing and rendering
-            self._start()
+        # Start raytracing and rendering
+        self._start()
 
-        except ShutdownException:
-            print("App Shutdown - by exception")
-            pass
+        #except ShutdownException:
+        #    print("App Shutdown - by exception!")
+        #    pass
 
-    def _update_k_map(self, img_map, stats):
-        self._k_map = img_map
-        self._raytracing_stats_stats = "Ray-tracing:  %i of %i rays hit image in at most %i bounces." % (
-            stats['rays_hit'], stats['n_rays'], stats['n_bounces'])
-
-    def _toggle_osd(self):
-        self._OSD_on = not self._OSD_on
-
-    def _start(self):
-        print("Starting scope...")
-        self._state = KScopeState.running
-
-        # set main help-text
-        self._status_bar.clear()
-        self._status_bar.add_msgs([k['txt'] for k in self._hotkeys], "Help", duration_sec=0)
-
-        # begin
-        self._ray_tracer.start()
-
-    def _shutdown(self):
-        self._state = KScopeState.shutdown
-        cv2.destroyAllWindows()
-        self._cam.shutdown()
-        if self._ray_tracer is not None:
-            self._ray_tracer.shutdown()
-        print("Main._shutdown() done.")
-
-    def _wait(self):
-        logging.info("Waiting...")
-        self._waiter.clear()
-        while self._state != KScopeState.shutdown:
-            if self._waiter.wait(timeout=0.1):
-                break
-        logging.info("Done waiting.")
-        if self._state == KScopeState.shutdown:
-            raise ShutdownException("App shut down during wait.")
+    def _user_pick_shape(self):
+        """
+        User selects type of mirror arrangement.
+        """
+        icons = [prism_type.get_icon(self._icon_size) for prism_type in KScopyApp.MIRROR_TYPES]
+        if len(icons) == 4:  # Need good way to arrange these automatically...
+            icons = [icons[:2], icons[2:]]
+        choice_ind = ChooseItemDialog(prompt="Select mirror Geometry:").ask_icons(icons)
+        return KScopyApp.MIRROR_TYPES[choice_ind]
 
     def _user_shape_mirrors(self):
         """
@@ -169,16 +115,44 @@ class KScopyApp(object):
         logging.info("Done waiting for shaping")
         # clear callback
         cv2.setMouseCallback(self._window_name, lambda *args: None)
+        
+    def _toggle_osd(self):
+        self._OSD_on = not self._OSD_on
 
-    def _user_pick_shape(self):
-        """
-        User selects type of mirror arrangement.
-        """
-        icons = [prism_type.get_icon(self._icon_size) for prism_type in KScopyApp.MIRROR_TYPES]
-        if len(icons) == 4:  # Need good way to arrange these automatically...
-            icons = [icons[:2], icons[2:]]
-        choice_ind = ChooseItemDialog(prompt="Select mirror Geometry:").ask_icons(icons)
-        return KScopyApp.MIRROR_TYPES[choice_ind]
+    def _shutdown(self):
+        self._state = KScopeState.shutdown
+        cv2.destroyAllWindows()
+        self._cam.shutdown()
+        if self._ray_tracer is not None:
+            self._ray_tracer.shutdown()
+        print("Main._shutdown() done.")
+
+'''
+    def _update_k_map(self, img_map, stats):
+        self._k_map = img_map
+        self._raytracing_stats_stats = "Ray-tracing:  %i of %i rays hit image in at most %i bounces." % (
+            stats['rays_hit'], stats['n_rays'], stats['n_bounces'])
+
+    def _start(self):
+        print("Starting scope...")
+        self._state = KScopeState.running
+
+        # set main help-text
+        self._status_bar.clear()
+        self._status_bar.add_msgs([k['txt'] for k in self._hotkeys], "Help", duration_sec=0)
+
+        # begin
+        self._ray_tracer.start()
+
+    def _wait(self):
+        logging.info("Waiting...")
+        self._waiter.clear()
+        while self._state != KScopeState.shutdown:
+            if self._waiter.wait(timeout=0.1):
+                break
+        logging.info("Done waiting.")
+        if self._state == KScopeState.shutdown:
+            raise ShutdownException("App shut down during wait.")
 
     def _proc_frame(self, in_frame, frame_time):
         self._fps['n_in'] += 1
@@ -290,7 +264,7 @@ class KScopyApp(object):
         else:
             self._status_bar.remove_msg('render_stats')
 
-
+'''
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
