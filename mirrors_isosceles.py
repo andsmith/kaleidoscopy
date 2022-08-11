@@ -2,6 +2,8 @@ import numpy as np
 from mirrors import MirrorPrism
 from mirror_utils import transform_points
 from gui_utils.mouse import MouseButtons, ButtonStates
+from layout import LAYOUT
+
 
 class IsoscelesPrism(MirrorPrism):
     def __init__(self):

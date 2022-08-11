@@ -18,37 +18,55 @@ import faulthandler  # div/0
 from gui_utils.mouse import MouseKeyboardState, ButtonStates, MouseButtons
 from gui_utils.text_annotation import get_best_font_scale
 from surfaces import Plane
+from layout import LAYOUT
+
+
+def mouse_motion_to_ui_input(pos1, pos2):
+    vdistance = (pos2[1] - pos1[1]) / LAYOUT['mouse_controls']['v_adjust_divisor']
+    hdistance = (pos2[1] - pos1[1]) / LAYOUT['mouse_controls']['h_adjust_divisor']
+    return hdistance, vdistance
+
+
+def clamped_adjust(value, increment, bounds):
+    """
+    Adjust a parameter within an interval.
+    :param value:  numeric value to adjust
+    :param increment:  value to add
+    :param bounds:  pair [lower, higher]
+    :returns: value + increment  unless out of bounds, then the relevant bound is returned
+    """
+    value += increment
+    if value < bounds[0]:
+        return bounds[0]
+    elif value > bounds[1]:
+        return bounds[1]
+    return value
 
 
 class MirrorPrism(ABC):
     """
     Abstract class to handle geometry.
     """
-    ICON_COLORS = {'background': (254, 250, 245),
-                   'foreground': (10, 10, 15)}
-
-    ICON_LAYOUT = {'fig_top_y': .1,
-                   'fig_bottom_y': .70,
-                   'text_bottom_y': 0.90}
 
     SHAPING_INSTRUCTIONS = ["Shape Mirror Geometry:  Hit SPACE-key when done...",
-                            " SHIFT + Left-click + Drag up-and-down:  Aperture size"]
-    _MIN_APERTURE_SCALE = 0.001
+                            " SHIFT + Left-click + Drag up-and-down:  FOV"]
+    FOV_BOUNDS = [np.deg2rad(30.0),  # shape should fill unit square at this FOV
+                  np.deg2rad(179.0)]  # not sure what this will do
 
     def __init__(self):
-        self._aperture_scale = 0.95
-        self._image_shape = None
-        self._mask = None
+        self._fov_rad = None
         self._shaping_finish_event = None
         self._shaping_window_name = None
-        self._mouse_state = MouseKeyboardState()
+        self._mouse_state = None
         self._mouse_pos_orig = None
-        self._base_aperture_scale = None
+        self._mask = None  # mask to keep only portion of image inside mirrors, for video during shaping
+        self._mouse_state_mgr = MouseKeyboardState()  # for listening to shift (etc.) keys
 
     @abstractmethod
-    def get_rel_shape(self, **kwargs):
+    def get_unit_shape(self, **kwargs):
         """
-        Get shape of mirrors, scaled to fit into unit square.
+        Get shape of mirrors, scaled to fit into unit square, given current FOV and pitch/yaw,
+        and custom params.
         """
         pass
 
@@ -56,11 +74,10 @@ class MirrorPrism(ABC):
         """
         Get Surface() objects (corresponding to all mirrors) from current params
 
-        Default behav. is to transform vertices from get_rel_shape() into Plane() objects.
+        :returns:  Plane() objects from vertices of mirrors.
         """
-        origin = np.zeros((1, 2), dtype=np.float64)
         surfaces = []
-        vertices = self.get_rel_shape()
+        vertices = self.get_unit_shape()
         n_planes = len(vertices)
         vertices = np.array(vertices + [vertices[-1]])
         for i in range(n_planes):
@@ -74,6 +91,7 @@ class MirrorPrism(ABC):
             bottom_p1 = np.array([p1[0], p1[1], 1.0])
             norm_vec = np.cross(top_p2 - top_p1, bottom_p1 - top_p1)
             norm_vec /= np.linalg.norm(norm_vec)
+            origin = np.zeros((1, 2), dtype=np.float64)
             ray_to_origin = origin - xy_intersection
             if np.dot(norm_vec, ray_to_origin) < 0:  # pointed away from origin
                 norm_vec = -norm_vec
@@ -83,7 +101,7 @@ class MirrorPrism(ABC):
 
     def start_shaping(self, window_name, finished_event):
         """
-        User sets shape of mirror arrangement.
+        User begins to set shape of mirror arrangement.
         """
         self._shaping_window_name = window_name
         self._shaping_finish_event = finished_event
@@ -104,88 +122,35 @@ class MirrorPrism(ABC):
           if "SHIFT" is down,  adjusts the aperture size,
           else  the other params are adjusted by the sub-class.
         """
-        mouse_keyboard_state = self._mouse_state.update_state(*args, **kwargs)
+        new_mk_state = self._mouse_state_mgr.update_state(*args, **kwargs)
 
-        if mouse_keyboard_state['mouse_buttons'][MouseButtons.LEFT] is not None and \
-                mouse_keyboard_state['mod_keys']['shift']:
+        if new_mk_state['mouse_buttons'][MouseButtons.LEFT] is not None and \
+                new_mk_state['mod_keys']['shift']:
+            # adjusting FOV
             if self._mouse_pos_orig is None:  # first time
-                self._mouse_pos_orig = mouse_keyboard_state['mouse_position']
-                self._base_aperture_scale = self._aperture_scale
+                self._mouse_pos_orig = new_mk_state['mouse_position']
             else:
-                distance = (self._mouse_pos_orig[1] - mouse_keyboard_state['mouse_position'][1]) / 400.0
-                self._aperture_scale = self._base_aperture_scale + distance
-                if self._aperture_scale < self._MIN_APERTURE_SCALE:
-                    self._aperture_scale = self._MIN_APERTURE_SCALE
-                if self._aperture_scale > 1.0:
-                    self._aperture_scale = 1.0
-                self._mask = None
+                _, adjustment = mouse_motion_to_ui_input(self._mouse_pos_orig, new_mk_state['mouse_position'])
+                self._fov_rad = clamped_adjust(self._fov_rad, adjustment, MirrorPrism.FOV_BOUNDS)
+                logging.info("Adjusting FOV to %.2f deg." % (np.rad2deg(self._fov_rad),))
 
-        if mouse_keyboard_state['button_change'] == 'l-up':
-            self._base_aperture_scale = None
+        if new_mk_state['button_change'] == 'l-up':
             self._mouse_pos_orig = None
 
-        if not mouse_keyboard_state['mod_keys']['shift']:
+        if not new_mk_state['mod_keys']['shift']:
             # shape sub-classes
-            self._mouse_adjust(mouse_keyboard_state['mouse_position'],
-                               mouse_keyboard_state['motion'],
-                               mouse_keyboard_state['button_change'],
-                               mouse_keyboard_state['mouse_buttons'],
-                               mouse_keyboard_state['mod_keys'])
+            self._mouse_adjust(new_mk_state['mouse_position'],
+                               new_mk_state['motion'],
+                               new_mk_state['button_change'],
+                               new_mk_state['mouse_buttons'],
+                               new_mk_state['mod_keys'])
 
     @abstractmethod
     def _mouse_adjust(self, pos, d_pos, d_button, button_state, keyboard_state):
         """
         Adjust shape-specific mirror params using mouse
-        NOTE:  right-mouse click is used by this parent class.
         """
         pass
-
-    def get_inscribed_rectangle_size(self, aspect, search_resolution_px=501, margin=0.05):
-        """
-        Get largest rectangle with given aspect ratio, fitting inside shape, leaving 'margin' space between the two.
-        :param aspect:  width/height of rectangle
-        :param search_resolution_px: grow box by 1 pixel at a time in an image of this size^2
-        :returns: array [x half-width, y half-width] of rectangle
-        """
-        if aspect < 1.0:
-            raise Exception("Portrait aspect ratios not implemented.")
-        verts = self.get_rel_shape()
-        img_scale = 1.0 / float(search_resolution_px)
-
-        img_shape = search_resolution_px, search_resolution_px  # shape already fits in square
-        c_xy = (np.array(img_shape)[::-1] / 2.0).astype(np.int64)
-
-        img = np.zeros((img_shape[0], img_shape[1], 3), dtype=np.uint8) + 255
-        masked = self.get_masked_image(img)  # will be zero outside shape, 255 inside
-
-        box_size_px = np.array([1.0, 1.0 / aspect])
-        box_size_step = box_size_px.copy()
-
-        final_half_box_size = None
-        while int(box_size_px[0] * 2) < img_shape[1] and int(box_size_px[1] * 2) < img_shape[0]:
-            box_size_px += box_size_step
-            bsp = box_size_px.astype(np.int64)
-
-            #print(c_xy, bsp, box_size_px, c_xy + bsp , c_xy-bsp)
-
-            if np.sum(c_xy - bsp < 0) + np.sum(c_xy + bsp > search_resolution_px) > 0:
-                # too big
-                logging.warning("Shape may not fit in unit square!")
-                final_half_box_size = (box_size_px - box_size_step - margin) * img_scale
-                break
-
-            edges = [masked[c_xy[1] - bsp[1]: c_xy[1] + bsp[1], c_xy[0] - bsp[0], 0].reshape(-1),
-                     masked[c_xy[1] - bsp[1]: c_xy[1] + bsp[1], c_xy[0] + bsp[0], 0].reshape(-1),
-                     masked[c_xy[1] - bsp[1], c_xy[0] - bsp[0]: c_xy[0] + bsp[0], 0].reshape(-1),
-                     masked[c_xy[1] + bsp[1], c_xy[0] - bsp[0]: c_xy[0] + bsp[0], 0].reshape(-1), ]
-
-            if np.sum(np.hstack(edges) == 0) > 0:
-                final_half_box_size = (box_size_px - box_size_step - margin) * img_scale
-                break
-
-        if final_half_box_size is None:
-            raise Exception("Couldn't fit rectangle in shape:  %s.  Is it too close to the origin?" % (verts,))
-        return final_half_box_size * 2.0
 
     def handle_keyboard_adjust(self, k):
         """
@@ -200,17 +165,18 @@ class MirrorPrism(ABC):
 
     def _make_mask(self, res):
         """
-        :param res:  (w, h) of image  (i.e. reverse from numpy)
-        """
-        points = self.get_rel_shape()
-        side_length = np.min(res[:2])
+        To show the shape of the mirrors while adjusting it, a video is shown with the portions exterior to the
+        mirrors blacked out by this mask.
 
-        x_offset = np.max((0, res[0] - side_length)) / 2
-        y_offset = np.max((0, res[1] - side_length)) / 2
+        :param res:  H x W of mask.
+        :returns: H x W boolean mask, y-axis is scaled to 1.0, x-axis scaled by aspect ratio
+        """
+        points = self.get_unit_shape()
+        points_scaled = points * res[0]
+        x_padding = (res[1] - res[0]) / 2.
+        points_scaled[:, 0] += x_padding
         mask = np.zeros(res[::-1], dtype=np.uint8)
-        x = points[:, 0] * side_length + x_offset
-        y = points[:, 1] * side_length + y_offset
-        coords = np.array([(int(xc), int(yc)) for xc, yc in zip(x, y)])
+        coords =np.int32(points)
         cv2.fillPoly(mask, [coords], 1, cv2.LINE_8)
         return mask[::-1, :]
 
@@ -218,13 +184,11 @@ class MirrorPrism(ABC):
         """
         Generate a bitmap
         """
-        if self._image_shape is None or (img.shape != self._image_shape) or self._mask is None:
-            # don't make a new one unnecessarily
-            self._image_shape = img.shape
-            self._mask = self._make_mask((self._image_shape[1], self._image_shape[0]))
+        if self._mask is None:
+            self._mask = self._make_mask(img.shape[:2])
 
-        maked = img * np.expand_dims(self._mask, 2)
-        return maked
+        masked = img * np.expand_dims(self._mask, 2)
+        return masked
 
     '''
     def _set_corners(self, corners, height, inscribed_radius=None):
@@ -322,24 +286,25 @@ class MirrorPrism(ABC):
 
     @staticmethod
     def _draw_icon(size, shape, name):
+        icon_colors = LAYOUT['icons']['colors']
         fonts = [cv2.FONT_HERSHEY_SCRIPT_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX]
         font_name = fonts[0]
         thickness = int(size / 200) if size > 200 else 1
         font_thickness = thickness
 
         img = np.zeros((size, size, 3)).astype(np.uint8)
-        img[:, :, :] = MirrorPrism.ICON_COLORS['background']
+        img[:, :, :] = icon_colors['background']
         point_start = tuple(np.int64(size * np.array(shape['points'][0])))
 
         for i in range(1, len(shape['points'])):
             point = tuple(np.int64(size * np.array(shape['points'][i])))
 
             if not shape['final_line_dashed'] or i < len(shape['points']) - 1:
-                cv2.line(img, point_start, point, MirrorPrism.ICON_COLORS['foreground'],
+                cv2.line(img, point_start, point, icon_colors['foreground'],
                          thickness, cv2.LINE_AA)
             else:
                 draw_dashed_line(img, point_start, point, num=4,
-                                 color=MirrorPrism.ICON_COLORS['foreground'],
+                                 color=icon_colors['foreground'],
                                  thickness=thickness, linetype=cv2.LINE_AA)
             point_start = point
 
@@ -353,12 +318,12 @@ class MirrorPrism(ABC):
                        int(text_pos[1]))
 
         img = cv2.putText(img, name, text_anchor, font_name, font_scale,
-                          MirrorPrism.ICON_COLORS['foreground'], font_thickness)
+                          icon_colors['foreground'], font_thickness)
         img[text_anchor[1], text_anchor[0], :] = [0, 255, 0]
 
         return img
 
-
+'''
 def draw_dashed_line(img, start, end, num, color, thickness, linetype=cv2.LINE_AA):
     x = np.linspace(start[0], end[0], num * 2).astype(np.int64)
     y = np.linspace(start[1], end[1], num * 2).astype(np.int64)
@@ -444,7 +409,7 @@ def plot_3d_polygon(corners, ax, color=(0.1, .15, 1.0, .5), **kwargs):
         handles.append(ax.add_collection3d(poly))
     return handles
 
-
+'''
 if __name__ == "__main__":
     faulthandler.enable()
     logging.basicConfig(level=logging.INFO)

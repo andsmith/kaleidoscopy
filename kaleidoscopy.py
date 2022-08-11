@@ -107,14 +107,13 @@ class KScopyApp(object):
         """
         self._state = KScopeState.shaping  # now camera frames go to shaping method of prism
         shaping_instructions, mouse_callback = self._mirrors.start_shaping(self._window_name, self._waiter)
-        self._pending_mouse_callback = mouse_callback
+        self._pending_mouse_callback = mouse_callback  # needs to be registered in same thread as imshow
         self._status_bar.clear()
         self._status_bar.add_msgs(shaping_instructions, "shaping")
 
-        self._wait()  # clears wait after user accepts?
+        self._wait()  # for user to finish
         logging.info("Done waiting for shaping")
-        # clear callback
-        cv2.setMouseCallback(self._window_name, lambda *args: None)
+        cv2.setMouseCallback(self._window_name, lambda *args: None)# clear callback
         
     def _toggle_osd(self):
         self._OSD_on = not self._OSD_on
@@ -127,7 +126,7 @@ class KScopyApp(object):
             self._ray_tracer.shutdown()
         print("Main._shutdown() done.")
 
-'''
+    '''
     def _update_k_map(self, img_map, stats):
         self._k_map = img_map
         self._raytracing_stats_stats = "Ray-tracing:  %i of %i rays hit image in at most %i bounces." % (
@@ -153,28 +152,8 @@ class KScopyApp(object):
         logging.info("Done waiting.")
         if self._state == KScopeState.shutdown:
             raise ShutdownException("App shut down during wait.")
-
+    '''
     def _proc_frame(self, in_frame, frame_time):
-        self._fps['n_in'] += 1
-        start_time = time.perf_counter()
-        if self._drop_frame_lock.acquire(blocking=False):
-            self._proc_frame_helper(in_frame, frame_time)
-            self._drop_frame_lock.release()
-        else:
-            logging.warning("DROP")
-            self._fps['n_dropped'] += 1
-
-        # calc cpu workload %
-        finish_time = time.perf_counter()
-        if self._last_frame_complete_time is not None:
-            elapsed = finish_time - self._last_frame_complete_time
-            working_time = finish_time - start_time
-            idle = working_time / elapsed
-            self._idle_pct_sum += idle * 100.0
-
-        self._last_frame_complete_time = finish_time
-
-    def _proc_frame_helper(self, in_frame, frame_time):
         """
         Frame processing callback.
         Can't throw shutdown exception, because this isn't the main thread.
@@ -208,7 +187,6 @@ class KScopyApp(object):
         self._out_frame_time = time.time()
         cv2.imshow(self._window_name, self._out_frame)
         k = cv2.waitKey(1)
-        self._fps['n_out'] += 1
 
         # KEYBOARD
         if ord('q') == k & 0xff:
@@ -264,7 +242,7 @@ class KScopyApp(object):
         else:
             self._status_bar.remove_msg('render_stats')
 
-'''
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
