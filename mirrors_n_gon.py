@@ -2,7 +2,7 @@ import numpy as np
 from mirrors import MirrorPrism
 from mirror_utils import transform_points
 from gui_utils.mouse import MouseButtons, ButtonStates
-
+from layout import LAYOUT
 
 class NGonPrism(MirrorPrism):
     _MAX_N = 15
@@ -69,9 +69,11 @@ class NGonPrism(MirrorPrism):
 
     @classmethod
     def get_icon_vertices(cls):
-        top_y = super().ICON_LAYOUT['fig_top_y']
-        bottom_y = super().ICON_LAYOUT['fig_bottom_y']
-        text_y = super().ICON_LAYOUT['text_bottom_y']
+
+
+        top_y = LAYOUT['icons']['fig_top_y']
+        bottom_y = LAYOUT['icons']['fig_bottom_y']
+        text_y = LAYOUT['icons']['text_bottom_y']
 
         img_center_y = (top_y + bottom_y) / 2.0
         img_center_x = 0.5

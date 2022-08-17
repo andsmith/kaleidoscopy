@@ -2,7 +2,7 @@ import numpy as np
 from mirrors import MirrorPrism
 from mirror_utils import transform_points
 from surfaces import Cylinder
-
+from layout import LAYOUT
 
 class CirclePrism(MirrorPrism):
     def __init__(self):
@@ -45,8 +45,10 @@ class CirclePrism(MirrorPrism):
 
     @classmethod
     def get_icon_vertices(cls):
-        top_y = super().ICON_LAYOUT['fig_top_y']
-        bottom_y = super().ICON_LAYOUT['fig_bottom_y']
+
+        top_y = LAYOUT['icons']['fig_top_y']
+        bottom_y = LAYOUT['icons']['fig_bottom_y']
+        text_y = LAYOUT['icons']['text_bottom_y']
         radius = (top_y - bottom_y) / 2.
         center_y = (top_y + bottom_y) / 2
         center_x = 0.5
@@ -55,8 +57,6 @@ class CirclePrism(MirrorPrism):
         points = np.stack([np.cos(t) * radius, np.sin(t) * radius], axis=1) + \
                  np.array((center_x, center_y)).reshape(1, 2)
 
-
-        text_y = super().ICON_LAYOUT['text_bottom_y']
         return {'points': points,
                 'text_center_bottom': [0.5, text_y],
                 'final_line_dashed': False}

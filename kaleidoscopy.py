@@ -13,26 +13,21 @@ from gui_utils.camera import Camera, pick_camera
 from gui_utils.text_annotation import StatusMessages
 from error_handling import ShutdownException
 from rendering import ImageMapper
-
+from layout import LAYOUT
 
 class KScopeState(Enum):
     setup = 0
-    running = 1
-    shaping = 2
-
+    shaping = 1
+    rendering = 2
+    running = 3
     shutdown = 100
 
 
 class KScopyApp(object):
     MIRROR_TYPES = PRISMS
-    _OSD_TEXT_COLOR = (255, 254, 250)
-    _OSD_BKG_COLOR = (118, 100, 90)
-    _OSD_ALPHA = 0.65
-    _FPS_PERIOD_SEC = 2.0
 
     def __init__(self, output_shape=(300, 500)):
-        self._output_res = output_shape
-        self._icon_size = 200
+        self._output_shape = output_shape
 
         self._window_name = "Kaleidoscopy"
         self._state = KScopeState.setup
@@ -41,8 +36,6 @@ class KScopyApp(object):
 
         self._OSD_on = True
         self._k_map = None  # stores current input-output mapping of pixels, bounce counts, distance traveled, etc.
-        self._render_stats = None
-        self._raytracing_stats = None
 
         self._hotkeys = [{'key': ' ',
                           'desc': 'Help',
@@ -54,8 +47,8 @@ class KScopyApp(object):
                           'func': self._shutdown,
                           'txt': "Q - Quit."}]
 
-        #self._drop_frame_lock = Lock()
-        #try:
+        # self._drop_frame_lock = Lock()
+        # try:
         # start
         if False:  ### TEMP DEBUG
             # with self._app_flow_lock:
@@ -70,24 +63,23 @@ class KScopyApp(object):
         self._mirror_type = self._user_pick_shape()
         self._mirrors = self._mirror_type()
         self._cam.start()
-        self._resolution = self._cam.get_resolution(wait=True)
-        image_shape = self._resolution[1], self._resolution[0]
-        self._status_bar = StatusMessages(image_shape, self._OSD_TEXT_COLOR,
-                                            self._OSD_BKG_COLOR,
-                                            bkg_alpha=self._OSD_ALPHA, spacing=10, max_font_scale=1.0)
-        self._renderer = ImageMapper(self._resolution)
+        self._input_shape = self._cam.get_resolution(wait=True)
+        self._status_bar = StatusMessages(input_shape, LAYOUT['osd']['text_color'],  # starts with resolution of camera
+                                          LAYOUT['osd']['bkg_color'],
+                                          bkg_alpha=LAYOUT['osd']['osd_alpha'], spacing=10, max_font_scale=1.0)
+        self._renderer = ImageMapper(self._input_shape, self._output_shape)
 
         # User shapes mirror parameters
         self._user_shape_mirrors()
         self._ray_tracer = RayTracer(mirrors=self._mirrors,
-                                        output_shape=self._resolution,
-                                        target_shape=self._resolution,
-                                        update_callback=self._update_k_map)
+                                     output_shape=self._output_shape,
+                                     target_shape=self._input_shape,  # "target" = thing rays hit
+                                     update_callback=self._update_k_map)
 
         # Start raytracing and rendering
         self._start()
 
-        #except ShutdownException:
+        # except ShutdownException:
         #    print("App Shutdown - by exception!")
         #    pass
 
@@ -95,7 +87,7 @@ class KScopyApp(object):
         """
         User selects type of mirror arrangement.
         """
-        icons = [prism_type.get_icon(self._icon_size) for prism_type in KScopyApp.MIRROR_TYPES]
+        icons = [prism_type.get_icon(LAYOUT['icons']['size']) for prism_type in KScopyApp.MIRROR_TYPES]
         if len(icons) == 4:  # Need good way to arrange these automatically...
             icons = [icons[:2], icons[2:]]
         choice_ind = ChooseItemDialog(prompt="Select mirror Geometry:").ask_icons(icons)
@@ -113,8 +105,8 @@ class KScopyApp(object):
 
         self._wait()  # for user to finish
         logging.info("Done waiting for shaping")
-        cv2.setMouseCallback(self._window_name, lambda *args: None)# clear callback
-        
+        cv2.setMouseCallback(self._window_name, lambda *args: None)  # clear callback
+
     def _toggle_osd(self):
         self._OSD_on = not self._OSD_on
 
@@ -126,17 +118,18 @@ class KScopyApp(object):
             self._ray_tracer.shutdown()
         print("Main._shutdown() done.")
 
-    '''
     def _update_k_map(self, img_map, stats):
+        """
+        Callback for renderer, to update the kaleidoscope mapping as it is created
+        """
         self._k_map = img_map
-        self._raytracing_stats_stats = "Ray-tracing:  %i of %i rays hit image in at most %i bounces." % (
-            stats['rays_hit'], stats['n_rays'], stats['n_bounces'])
 
     def _start(self):
         print("Starting scope...")
-        self._state = KScopeState.running
+        self._state = KScopeState.rendering
 
-        # set main help-text
+        # setup main OSD
+        self._status_bar.set_image_shape(self._output_shape)
         self._status_bar.clear()
         self._status_bar.add_msgs([k['txt'] for k in self._hotkeys], "Help", duration_sec=0)
 
@@ -152,7 +145,7 @@ class KScopyApp(object):
         logging.info("Done waiting.")
         if self._state == KScopeState.shutdown:
             raise ShutdownException("App shut down during wait.")
-    '''
+
     def _proc_frame(self, in_frame, frame_time):
         """
         Frame processing callback.
@@ -164,6 +157,7 @@ class KScopyApp(object):
 
         # PROCESS
         if self._state == KScopeState.setup:
+            # user picking camera & shape
             return
 
         elif self._state == KScopeState.shaping:
@@ -206,9 +200,9 @@ class KScopyApp(object):
             self._pending_mouse_callback = None
 
     def _render(self, frame):
-        #if self._k_map is None:
+        # if self._k_map is None:
         ##    self._ray_tracer.get_current_map()
-        #out_frame = self._renderer.render(frame, self._k_map['mapping'])
+        # out_frame = self._renderer.render(frame, self._k_map['mapping'])
         return frame.copy()
 
     def _update_osd_info(self):

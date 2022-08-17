@@ -1,6 +1,6 @@
 class ImageMapper(object):
-    def __init__(self, resolution):
-        self._img_shape = resolution[1], resolution[0]
+    def __init__(self, input_shape, output_shape):
+        self._in_shape, self._out_shape = input_shape, output_shape
 
     def render(self, input, mapping):
         return input.copy()

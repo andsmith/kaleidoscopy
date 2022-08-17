@@ -50,8 +50,6 @@ class MirrorPrism(ABC):
 
     SHAPING_INSTRUCTIONS = ["Shape Mirror Geometry:  Hit SPACE-key when done...",
                             " SHIFT + Left-click + Drag up-and-down:  FOV"]
-    FOV_BOUNDS = [np.deg2rad(30.0),  # shape should fill unit square at this FOV
-                  np.deg2rad(179.0)]  # not sure what this will do
 
     def __init__(self):
         self._fov_rad = None
@@ -63,13 +61,29 @@ class MirrorPrism(ABC):
         self._mouse_state_mgr = MouseKeyboardState()  # for listening to shift (etc.) keys
 
     @abstractmethod
-    def get_unit_shape(self, **kwargs):
+    def get_unscaled_shape(self, **kwargs):
         """
-        Get shape of mirrors, scaled to fit into unit square, given current FOV and pitch/yaw,
-        and custom params.
+        Get "raw" 2d vertices of mirror corners, unscaled by FOV, just defined by shape customization params.
+        (i.e. should be largest inscribed in unit square)
         """
         pass
 
+    def get_scaled_shape(self):
+        """
+        Get shape of mirrors as they will appear in the window, that is, given FOV and custom params.
+        When FOV is minimum, unit square just fits inside window.
+        """
+        geom = LAYOUT['geom']
+        unscaled = self.get_unscaled_shape()
+
+        # focus & image left & right corners form 2 right triangles w/ right angles at midpoint on image.
+        # when fov is minimum, unit square fills window, so scale appropriately.
+
+        base_size = np.tan(self._fov_rad) / np.tan(LAYOUT['geom']['fov_range_rad'])
+        scaled = unscaled / base_size
+        # implement different POV-angles here
+        return scaled
+    '''
     def get_surfaces(self):
         """
         Get Surface() objects (corresponding to all mirrors) from current params
@@ -77,7 +91,7 @@ class MirrorPrism(ABC):
         :returns:  Plane() objects from vertices of mirrors.
         """
         surfaces = []
-        vertices = self.get_unit_shape()
+        vertices = self.get_scaled_shape()
         n_planes = len(vertices)
         vertices = np.array(vertices + [vertices[-1]])
         for i in range(n_planes):
@@ -98,7 +112,7 @@ class MirrorPrism(ABC):
             surfaces.append(Plane(xyz_intersect=(xy_intersection[0], xy_intersection[1], 0.0),
                                   normal=norm_vec))
         return surfaces
-
+    '''
     def start_shaping(self, window_name, finished_event):
         """
         User begins to set shape of mirror arrangement.
@@ -131,7 +145,7 @@ class MirrorPrism(ABC):
                 self._mouse_pos_orig = new_mk_state['mouse_position']
             else:
                 _, adjustment = mouse_motion_to_ui_input(self._mouse_pos_orig, new_mk_state['mouse_position'])
-                self._fov_rad = clamped_adjust(self._fov_rad, adjustment, MirrorPrism.FOV_BOUNDS)
+                self._fov_rad = clamped_adjust(self._fov_rad, adjustment, LAYOUT['geom']['fov_range_rad'])
                 logging.info("Adjusting FOV to %.2f deg." % (np.rad2deg(self._fov_rad),))
 
         if new_mk_state['button_change'] == 'l-up':
@@ -171,12 +185,12 @@ class MirrorPrism(ABC):
         :param res:  H x W of mask.
         :returns: H x W boolean mask, y-axis is scaled to 1.0, x-axis scaled by aspect ratio
         """
-        points = self.get_unit_shape()
+        points = self.get_scaled_shape()
         points_scaled = points * res[0]
         x_padding = (res[1] - res[0]) / 2.
         points_scaled[:, 0] += x_padding
         mask = np.zeros(res[::-1], dtype=np.uint8)
-        coords =np.int32(points)
+        coords = np.int32(points)
         cv2.fillPoly(mask, [coords], 1, cv2.LINE_8)
         return mask[::-1, :]
 
@@ -323,7 +337,7 @@ class MirrorPrism(ABC):
 
         return img
 
-'''
+
 def draw_dashed_line(img, start, end, num, color, thickness, linetype=cv2.LINE_AA):
     x = np.linspace(start[0], end[0], num * 2).astype(np.int64)
     y = np.linspace(start[1], end[1], num * 2).astype(np.int64)
@@ -338,6 +352,9 @@ def _test_draw_dashed_line():
     draw_dashed_line(img, (10, 10), (90, 80), 5, (255, 255, 255), thickness=2)
     plt.imshow(img)
     plt.show()
+
+
+'''
 
 
 def max_inscribed_circle(corners):

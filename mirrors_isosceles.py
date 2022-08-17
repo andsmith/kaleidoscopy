@@ -16,25 +16,19 @@ class IsoscelesPrism(MirrorPrism):
     SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS + \
                            [' Left-click + Drag up-and-down:  Vertex angle"']
 
-    def get_rel_shape(self, **kwargs):
+    def get_unit_shape(self, **kwargs):
         """
-        Get coordinates of vertices of current shape,  fit into the unit square.
+        Get shape of mirrors, scaled to fit into unit square, given current FOV and pitch/yaw,
+        and custom params.
         """
         top = (0.5, 1.0)
         bottom_left = (0.5 - np.sin(self._theta / 2.0), 1.0 - np.cos(self._theta / 2.0))
         bottom_right = (0.5 + np.sin(self._theta / 2.0), 1.0 - np.cos(self._theta / 2.0))
         points = np.array([top, bottom_left, bottom_right])
 
-        points = transform_points(unit_points=points, scale=self._aperture_scale, center = np.array([0.5,0.5]))
+        points = transform_points(unit_points=points, scale=self._aperture_scale, center=np.array([0.5, 0.5]))
 
         return points
-
-
-
-    def get_surfaces(self):
-        """
-        Get Surface() objects (corresponding to all mirrors) from current params
-        """
 
     def _mouse_adjust(self, pos, d_pos, d_button, button_state, keyboard_state):
 
@@ -55,9 +49,9 @@ class IsoscelesPrism(MirrorPrism):
 
     @classmethod
     def get_icon_vertices(cls):
-        top_y = super().ICON_LAYOUT['fig_top_y']
-        bottom_y = super().ICON_LAYOUT['fig_bottom_y']
-        text_y = super().ICON_LAYOUT['text_bottom_y']
+        top_y = LAYOUT['icons']['fig_top_y']
+        bottom_y = LAYOUT['icons']['fig_bottom_y']
+        text_y = LAYOUT['icons']['text_bottom_y']
         points = [(0.63, bottom_y),
                   (0.37, bottom_y),
                   (0.5, top_y), ]
@@ -69,6 +63,7 @@ class IsoscelesPrism(MirrorPrism):
                 'text_center_bottom': [0.5, text_y],
                 'final_line_dashed': True}
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     x = IsoscelesPrism()
     print(x)
