@@ -63,8 +63,8 @@ class KScopyApp(object):
         self._mirror_type = self._user_pick_shape()
         self._mirrors = self._mirror_type()
         self._cam.start()
-        self._input_shape = self._cam.get_resolution(wait=True)
-        self._status_bar = StatusMessages(input_shape, LAYOUT['osd']['text_color'],  # starts with resolution of camera
+        self._input_shape = self._cam.get_resolution(wait=True)[::-1]
+        self._status_bar = StatusMessages(self._input_shape, LAYOUT['osd']['text_color'],  # starts with resolution of camera
                                           LAYOUT['osd']['bkg_color'],
                                           bkg_alpha=LAYOUT['osd']['osd_alpha'], spacing=10, max_font_scale=1.0)
         self._renderer = ImageMapper(self._input_shape, self._output_shape)

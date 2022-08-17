@@ -6,6 +6,7 @@ from layout import LAYOUT
 
 
 class IsoscelesPrism(MirrorPrism):
+
     def __init__(self):
         """
         default is 30 degree wedge.
@@ -16,17 +17,17 @@ class IsoscelesPrism(MirrorPrism):
     SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS + \
                            [' Left-click + Drag up-and-down:  Vertex angle"']
 
-    def get_unit_shape(self, **kwargs):
+    def get_unscaled_shape(self, **kwargs):
         """
-        Get shape of mirrors, scaled to fit into unit square, given current FOV and pitch/yaw,
-        and custom params.
+        Get "raw" 2d vertices of mirror corners, unscaled by FOV, just defined by shape customization params.
+        (i.e. should be largest inscribed in unit square)
         """
+        pass
+
         top = (0.5, 1.0)
         bottom_left = (0.5 - np.sin(self._theta / 2.0), 1.0 - np.cos(self._theta / 2.0))
         bottom_right = (0.5 + np.sin(self._theta / 2.0), 1.0 - np.cos(self._theta / 2.0))
         points = np.array([top, bottom_left, bottom_right])
-
-        points = transform_points(unit_points=points, scale=self._aperture_scale, center=np.array([0.5, 0.5]))
 
         return points
 

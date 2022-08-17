@@ -52,7 +52,7 @@ class MirrorPrism(ABC):
                             " SHIFT + Left-click + Drag up-and-down:  FOV"]
 
     def __init__(self):
-        self._fov_rad = None
+        self._fov_rad = LAYOUT['geom']['fov_range_rad'][0]  # narrowest FOV to start?
         self._shaping_finish_event = None
         self._shaping_window_name = None
         self._mouse_state = None
@@ -78,8 +78,8 @@ class MirrorPrism(ABC):
 
         # focus & image left & right corners form 2 right triangles w/ right angles at midpoint on image.
         # when fov is minimum, unit square fills window, so scale appropriately.
-
-        base_size = np.tan(self._fov_rad) / np.tan(LAYOUT['geom']['fov_range_rad'])
+        print(self._fov_rad, np.rad2deg(self._fov_rad), LAYOUT['geom']['fov_range_rad'])
+        base_size = np.tan(self._fov_rad) / np.tan(LAYOUT['geom']['fov_range_rad'][0])
         scaled = unscaled / base_size
         # implement different POV-angles here
         return scaled
@@ -177,7 +177,7 @@ class MirrorPrism(ABC):
             logging.info("Done shaping.")
             self._done_shaping()
 
-    def _make_mask(self, res):
+    def _make_mask(self, shape):
         """
         To show the shape of the mirrors while adjusting it, a video is shown with the portions exterior to the
         mirrors blacked out by this mask.
@@ -186,10 +186,10 @@ class MirrorPrism(ABC):
         :returns: H x W boolean mask, y-axis is scaled to 1.0, x-axis scaled by aspect ratio
         """
         points = self.get_scaled_shape()
-        points_scaled = points * res[0]
-        x_padding = (res[1] - res[0]) / 2.
+        points_scaled = points * shape[0]
+        x_padding = (shape[0] - shape[1]) / 2.
         points_scaled[:, 0] += x_padding
-        mask = np.zeros(res[::-1], dtype=np.uint8)
+        mask = np.zeros(shape, dtype=np.uint8)
         coords = np.int32(points)
         cv2.fillPoly(mask, [coords], 1, cv2.LINE_8)
         return mask[::-1, :]
