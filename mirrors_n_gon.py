@@ -4,6 +4,7 @@ from mirror_utils import transform_points
 from gui_utils.mouse import MouseButtons, ButtonStates
 from layout import LAYOUT
 
+
 class NGonPrism(MirrorPrism):
     _MAX_N = 15
 
@@ -19,14 +20,18 @@ class NGonPrism(MirrorPrism):
     def get_name(cls):
         return " n-polygon "
 
-    def get_rel_shape(self, **kwargs):
+    SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS + \
+        [' Left-click + Drag up-and-down:  adjust N',
+         ' Left-click + Drag left-and-right:  adjust angle', ]
+
+    def get_unscaled_shape(self, **kwargs):
         """
         Get coordinates of vertices of current shape, fit into the unit square.
         """
+        r = 0.5
+        center = np.array([0.5, 0.5]).reshape(1, 2)
         theta = np.linspace(self._phi, np.pi * 2 + self._phi, self._n, endpoint=False)
-        points = np.array([(np.cos(t), np.sin(t)) for t in theta]) * 0.5 + np.array([0.5, 0.5]).reshape(1,2)
-        points = transform_points(unit_points=points, scale=self._aperture_scale, center=np.array([0.5, 0.5]))
-
+        points = np.array([(np.cos(t), np.sin(t)) for t in theta]) * r + center
         return points
 
     def _mouse_adjust(self, pos, d_pos, d_button, button_state, keyboard_state):
@@ -59,17 +64,13 @@ class NGonPrism(MirrorPrism):
         else:
             self._button_first_pressed_pos = None
 
-
-
     def get_surfaces(self):
         """
         Get Surface() objects (corresponding to all mirrors) from current params
         """
 
-
     @classmethod
     def get_icon_vertices(cls):
-
 
         top_y = LAYOUT['icons']['fig_top_y']
         bottom_y = LAYOUT['icons']['fig_bottom_y']

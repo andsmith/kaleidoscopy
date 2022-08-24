@@ -4,31 +4,26 @@ from mirror_utils import transform_points
 from surfaces import Cylinder
 from layout import LAYOUT
 
+N_SAMPLES = 1000  # for drawing mask during shaping
+
+
 class CirclePrism(MirrorPrism):
+    def get_unscaled_shape(self, **kwargs):
+        r = 0.5
+        center = np.array((0.5, 0.5)).reshape(1, 2)
+        t = np.linspace(0.0, np.pi * 2.0, N_SAMPLES)
+        points = np.stack([np.cos(t) * r,
+                           np.sin(t) * r], axis=1) + center
+        print(points.shape)
+
+        return points
+
     def __init__(self):
         """
         """
         super(CirclePrism, self).__init__()
 
     SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS
-
-    def get_rel_shape(self, n_approx=1000, **kwargs):
-        """
-        Get coordinates of vertices of current shape,  fit into the unit square.
-
-        # since elliptical, will be approximate
-        """
-        t = np.linspace(0.0, np.pi * 2.0, n_approx)
-        r = self.get_radius()
-        center = np.array([0.5, 0.4]).reshape(1, 2)
-        points = np.hstack([(np.cos(t) * r).reshape(-1, 1),
-                            (np.sin(t) * r).reshape(-1, 1)]) + center
-        points = transform_points(unit_points=points, scale=self._aperture_scale, center=np.array([0.5, 0.5]))
-
-        return points
-
-    def get_radius(self):
-        return 0.5 * self._aperture_scale
 
     def _mouse_adjust(self, pos, d_pos, d_button, button_state, keyboard_state):
         pass  # no params!
@@ -45,7 +40,6 @@ class CirclePrism(MirrorPrism):
 
     @classmethod
     def get_icon_vertices(cls):
-
         top_y = LAYOUT['icons']['fig_top_y']
         bottom_y = LAYOUT['icons']['fig_bottom_y']
         text_y = LAYOUT['icons']['text_bottom_y']
