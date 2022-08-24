@@ -166,7 +166,7 @@ class KScopyApp(object):
 
         elif self._state == KScopeState.running:
             out_frame = self._render(in_frame)
-            self._update_osd_info()
+            # self._update_osd_info()
             if self._OSD_on:
                 self._status_bar.annotate_img(out_frame)
 
@@ -184,6 +184,7 @@ class KScopyApp(object):
 
         # KEYBOARD
         if ord('q') == k & 0xff:
+            logging.info("Hotkey shutdown starting...")
             self._shutdown()  # catch-all
 
         if self._state == KScopeState.running:
@@ -204,7 +205,7 @@ class KScopyApp(object):
         ##    self._ray_tracer.get_current_map()
         # out_frame = self._renderer.render(frame, self._k_map['mapping'])
         return frame.copy()
-
+    '''
     def _update_osd_info(self):
         """
             On-screen display components:
@@ -235,7 +236,7 @@ class KScopyApp(object):
             self._status_bar.add_msg(self._render_stats, "render_stats")
         else:
             self._status_bar.remove_msg('render_stats')
-
+    '''
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

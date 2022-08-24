@@ -15,19 +15,23 @@ class IsoscelesPrism(MirrorPrism):
         super(IsoscelesPrism, self).__init__()
 
     SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS + \
-                           [' Left-click + Drag up-and-down:  Vertex angle"']
+                           [' Left-click + Drag up-and-down: adjust angle"']
 
     def get_unscaled_shape(self, **kwargs):
         """
         Get "raw" 2d vertices of mirror corners, unscaled by FOV, just defined by shape customization params.
         (i.e. should be largest inscribed in unit square)
+
+        Iso-triangle is upside-down, with adjustable angle in center of screen.
         """
         pass
+        height = 0.5
+        bottom = (0.5, 0.5)
+        half_base_length = height * np.tan(self._theta / 2.0)
 
-        top = (0.5, 1.0)
-        bottom_left = (0.5 - np.sin(self._theta / 2.0), 1.0 - np.cos(self._theta / 2.0))
-        bottom_right = (0.5 + np.sin(self._theta / 2.0), 1.0 - np.cos(self._theta / 2.0))
-        points = np.array([top, bottom_left, bottom_right])
+        top_left = (0.5 - half_base_length, 1.0)
+        top_right = (0.5 + half_base_length, 1.0)
+        points = np.array([top_left, top_right, bottom])
 
         return points
 
@@ -43,6 +47,8 @@ class IsoscelesPrism(MirrorPrism):
                     self._theta = np.deg2rad(1)
                 if self._theta >= np.deg2rad(179):
                     self._theta = np.deg2rad(178)
+                self._mask = None
+
 
     @classmethod
     def get_name(cls):
