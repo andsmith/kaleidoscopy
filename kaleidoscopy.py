@@ -5,7 +5,7 @@ import logging
 import time
 # from util import make_bounds, TextManager, Image
 from threading import Lock, Event, enumerate, get_ident, Thread
-from ray_tracing import RayTracer
+# from ray_tracing import RayTracer
 from prisms import PRISMS
 from enum import Enum
 from gui_utils.gui_picker import ChooseItemDialog
@@ -15,10 +15,11 @@ from error_handling import ShutdownException
 from rendering import ImageMapper
 from layout import LAYOUT
 
+
 class KScopeState(Enum):
     setup = 0
     shaping = 1
-    rendering = 2
+    ray_tracing = 2
     running = 3
     shutdown = 100
 
@@ -28,15 +29,11 @@ class KScopyApp(object):
 
     def __init__(self, output_shape=(300, 500)):
         self._output_shape = output_shape
-
         self._window_name = "Kaleidoscopy"
         self._state = KScopeState.setup
         # self._app_flow_lock = Lock()
         self._waiter = Event()
-
         self._OSD_on = True
-        self._k_map = None  # stores current input-output mapping of pixels, bounce counts, distance traveled, etc.
-
         self._hotkeys = [{'key': ' ',
                           'desc': 'Help',
                           'func': self._toggle_osd,
@@ -52,6 +49,8 @@ class KScopyApp(object):
         # start
         if False:  ### TEMP DEBUG
             # with self._app_flow_lock:
+
+            # User chooses camera
             self._cam_ind = pick_camera()
             self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=True)
         else:
@@ -59,31 +58,41 @@ class KScopyApp(object):
             self._cam = Camera(self._cam_ind, self._proc_frame, prompt_resolution=False)
 
         # User chooses type of scope
-        self._ray_tracer = None
         self._mirror_type = self._user_pick_shape()
         self._mirrors = self._mirror_type()
         self._cam.start()
         self._input_shape = self._cam.get_resolution(wait=True)[::-1]
-        self._status_bar = StatusMessages(self._input_shape, LAYOUT['osd']['text_color'],  # starts with resolution of camera
+        self._status_bar = StatusMessages(self._input_shape, LAYOUT['osd']['text_color'],
+                                          # starts with resolution of camera
                                           LAYOUT['osd']['bkg_color'],
                                           bkg_alpha=LAYOUT['osd']['osd_alpha'], spacing=10, max_font_scale=1.0)
         self._renderer = ImageMapper(self._input_shape, self._output_shape)
 
         # User shapes mirror parameters
         self._user_shape_mirrors()
-        self._ray_tracer = RayTracer(mirrors=self._mirrors,
-                                     output_shape=self._output_shape,
-                                     target_shape=self._input_shape,  # "target" = thing rays hit
-                                     update_callback=self._update_k_map)
+        self._ray_tracer = None  # ScopeTracer(mirrors=self._mirrors,
+        #                               output_shape=self._output_shape,  # "output" = produced image/mapping
+        #                               target_shape=self._input_shape,  # "target" = thing rays hit
+        #                               update_callback=self._update_k_map)  #
 
         # Start raytracing and rendering
-        self._start()
+        print("Starting Raytracer and Scope...")
+        self._state = KScopeState.ray_tracing
+
+        # setup main OSD (params may differ from OSD during mirror shaping)
+        self._status_bar.set_image_shape(self._output_shape)
+        self._status_bar.clear()
+        self._status_bar.add_msgs([k['txt'] for k in self._hotkeys], "Help", duration_sec=0)
+
+        # begin
+        # self._ray_tracer.start()
 
         # except ShutdownException:
         #    print("App Shutdown - by exception!")
         #    pass
 
-    def _user_pick_shape(self):
+    @staticmethod
+    def _user_pick_shape():
         """
         User selects type of mirror arrangement.
         """
@@ -123,18 +132,6 @@ class KScopyApp(object):
         Callback for renderer, to update the kaleidoscope mapping as it is created
         """
         self._k_map = img_map
-
-    def _start(self):
-        print("Starting scope...")
-        self._state = KScopeState.rendering
-
-        # setup main OSD
-        self._status_bar.set_image_shape(self._output_shape)
-        self._status_bar.clear()
-        self._status_bar.add_msgs([k['txt'] for k in self._hotkeys], "Help", duration_sec=0)
-
-        # begin
-        self._ray_tracer.start()
 
     def _wait(self):
         logging.info("Waiting...")
@@ -205,6 +202,7 @@ class KScopyApp(object):
         ##    self._ray_tracer.get_current_map()
         # out_frame = self._renderer.render(frame, self._k_map['mapping'])
         return frame.copy()
+
     '''
     def _update_osd_info(self):
         """
@@ -237,6 +235,7 @@ class KScopyApp(object):
         else:
             self._status_bar.remove_msg('render_stats')
     '''
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

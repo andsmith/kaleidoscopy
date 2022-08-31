@@ -25,7 +25,7 @@ def mouse_motion_to_ui_input(pos1, pos2):
     vdistance = (pos2[1] - pos1[1]) / LAYOUT['mouse_controls']['v_adjust_divisor']
     hdistance = (pos2[1] - pos1[1]) / LAYOUT['mouse_controls']['h_adjust_divisor']
 
-    #print("V:  %.3f\nH:  %.3f\n" % (vdistance, hdistance))
+    # print("V:  %.3f\nH:  %.3f\n" % (vdistance, hdistance))
 
     return hdistance, vdistance
 
@@ -52,11 +52,11 @@ class MirrorPrism(ABC):
     """
 
     SHAPING_INSTRUCTIONS = ["Shape Mirror Geometry:  Hit SPACE-key when done...",
-                            " SHIFT + Left-click + Drag up-and-down:  FOV"]
+                            " SHIFT + Left-click + Drag up-and-down:  aperture"]
 
     def __init__(self):
-        self._fov_rad = LAYOUT['geom']['fov_range_rad'][0]  # narrowest FOV to start?
-        self._old_fov = None  # hold value while user adjusts FOV
+        self._aperture_scale = 1.0  # largest to start
+        self._old_aperture_scale = None  # hold value while user adjusts
         self._shaping_finish_event = None
         self._shaping_window_name = None
         self._mouse_state = None
@@ -67,24 +67,24 @@ class MirrorPrism(ABC):
     @abstractmethod
     def get_unscaled_shape(self, **kwargs):
         """
-        Get "raw" 2d vertices of mirror corners, unscaled by FOV, just defined by shape customization params.
-        (i.e. should be largest inscribed in unit square)
+        Get "raw" 2d vertices of mirror corners, unscaled by aperture size, just defined by shape customization params.
+        (i.e. should be largest, at scale 1.0, and inscribed in unit square)
         """
         pass
 
+    def get_aperture_scale(self):
+        return self._aperture_scale
+
     def get_scaled_shape(self):
         """
-        Get shape of mirrors as they will appear in the window, that is, given FOV and custom params.
-        When FOV is minimum, unit square just fits inside window.
+        Get shape of mirrors as they will appear in the window, that is, given aperture scale and custom params.
         """
-        geom = LAYOUT['geom']
         unscaled = self.get_unscaled_shape()
-        center = np.array((0.5,0.5)).reshape(1,2)  # everything shrinks towards this
+        center = np.array((0.5, 0.5)).reshape(1, 2)  # everything shrinks towards this
 
         # focus & image left & right corners form 2 right triangles w/ right angles at midpoint on image.
-        # when fov is minimum, unit square fills window, so scale appropriately.
-        base_size = np.tan(self._fov_rad/2.0) / np.tan(LAYOUT['geom']['fov_range_rad'][0]/2.0)
-        scaled = (unscaled-center) / base_size + center
+        # when aperture is maximum, unit square fills window.
+        scaled = (unscaled - center) * self._aperture_scale + center
         return scaled
 
     '''
@@ -124,11 +124,11 @@ class MirrorPrism(ABC):
         """
         self._shaping_window_name = window_name
         self._shaping_finish_event = finished_event
-        #print("Start shaping:", self._shaping_finish_event, id(self))
+        # print("Start shaping:", self._shaping_finish_event, id(self))
         return self.SHAPING_INSTRUCTIONS, self.handle_mouse_adjust
 
     def _done_shaping(self):
-        #print("Stopping shaping:", self._shaping_finish_event, id(self))
+        # print("Stopping shaping:", self._shaping_finish_event, id(self))
         self._shaping_finish_event.set()
         logging.info("Finished event set...")
         self._shaping_finish_event = None
@@ -143,22 +143,22 @@ class MirrorPrism(ABC):
         """
         new_mk_state = self._mouse_state_mgr.update_state(*args, **kwargs)
 
-        if new_mk_state['mouse_buttons'][MouseButtons.LEFT]==ButtonStates.DOWN and \
+        if new_mk_state['mouse_buttons'][MouseButtons.LEFT] == ButtonStates.DOWN and \
                 new_mk_state['mod_keys']['shift']:
-            # adjusting FOV
+            # adjusting aperture
             if self._mouse_pos_orig is None:  # first time
-                self._old_fov = self._fov_rad
+                self._old_aperture_scale = self._aperture_scale
                 self._mouse_pos_orig = new_mk_state['mouse_position']
             else:
                 _, adjustment = mouse_motion_to_ui_input(self._mouse_pos_orig, new_mk_state['mouse_position'])
-                #print(np.array(self._mouse_pos_orig)-np.array( new_mk_state['mouse_position']), adjustment)
-                self._fov_rad = clamped_adjust(self._old_fov, adjustment, LAYOUT['geom']['fov_range_rad'])
-                #logging.info("Adjusting FOV to %.2f deg." % (np.rad2deg(self._fov_rad),))
+                # print(np.array(self._mouse_pos_orig)-np.array( new_mk_state['mouse_position']), adjustment)
+                self._aperture_scale = clamped_adjust(self._old_aperture_scale, -adjustment , [0.0, 1.0])
+                logging.info("Adjusting aperture scale to %.3f." % (self._aperture_scale,))
                 self._mask = None
 
         if new_mk_state['button_change'] == 'l-up':
             self._mouse_pos_orig = None
-            self._old_fov = None
+            self._old_aperture_scale = None
 
         if not new_mk_state['mod_keys']['shift']:
             # shape sub-classes
@@ -194,20 +194,20 @@ class MirrorPrism(ABC):
         :param res:  H x W of mask.
         :returns: H x W boolean mask, y-axis is scaled to 1.0, x-axis scaled by aspect ratio
         """
-        #import ipdb; ipdb.set_trace()
+        # import ipdb; ipdb.set_trace()
         points = self.get_scaled_shape()
-        points_scaled = points * shape[0]  # ASSUME wider than tall, breaks otherwise
+        points_scaled = points * shape[0]  # ASSUME wider than tall, breaks/clips border otherwise
         x_padding = (shape[1] - shape[0]) / 2.
         points_scaled[:, 0] += x_padding
 
-        #print(points_scaled)
+        # print(points_scaled)
         mask = np.zeros(shape, dtype=np.uint8)
         coords = np.int32(points_scaled)
         cv2.fillPoly(mask, [coords], 1, cv2.LINE_8)
-        #cv2.imwrite("test.png", mask)
-        #print("SAVED TEST IMAGE!!!!!!!!!!!!!!")
+        # cv2.imwrite("test.png", mask)
+        # print("SAVED TEST IMAGE!!!!!!!!!!!!!!")
         mask = mask[::-1, :]
-        #print("mask transparency:", np.mean(mask))  #
+        # print("mask transparency:", np.mean(mask))  #
         return mask
 
     def get_masked_image(self, img):
