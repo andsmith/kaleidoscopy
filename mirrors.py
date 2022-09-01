@@ -152,7 +152,7 @@ class MirrorPrism(ABC):
             else:
                 _, adjustment = mouse_motion_to_ui_input(self._mouse_pos_orig, new_mk_state['mouse_position'])
                 # print(np.array(self._mouse_pos_orig)-np.array( new_mk_state['mouse_position']), adjustment)
-                self._aperture_scale = clamped_adjust(self._old_aperture_scale, -adjustment , [0.0, 1.0])
+                self._aperture_scale = clamped_adjust(self._old_aperture_scale, -adjustment, [0.0, 1.0])
                 logging.info("Adjusting aperture scale to %.3f." % (self._aperture_scale,))
                 self._mask = None
 

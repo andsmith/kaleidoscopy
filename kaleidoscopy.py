@@ -72,7 +72,6 @@ class KScopyApp(object):
         self._user_shape_mirrors()
         self._ray_tracer = None  # ScopeTracer(mirrors=self._mirrors,
         #                               output_shape=self._output_shape,  # "output" = produced image/mapping
-        #                               target_shape=self._input_shape,  # "target" = thing rays hit
         #                               update_callback=self._update_k_map)  #
 
         # Start raytracing and rendering

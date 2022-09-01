@@ -1,5 +1,5 @@
 import logging
-from ray_tracing import RayTracer
+from ray_tracing import make_unit_rays
 from mirrors_rectangle import RectangularPrism
 
 
@@ -10,18 +10,19 @@ from mirrors_rectangle import RectangularPrism
 
 
 
-def test_ray_tracing():
-    def _update_test(*args, **kwargs):
-        print("Ray tracer updated.")
-        pass
-    plot_no = 1
+def test_make_unit_rays():
+    #import ipdb ;ipdb.set_trace()
+    origins, directions = make_unit_rays((11,20))  # landscape
+    print(origins.shape)
+    print(directions)
+    origins, directions = make_unit_rays((15,10))  # portrait
+    print(origins.shape)
+    print(directions)
 
-    shape = (480,640)
-    rt = RayTracer(mirrors=mirrors, img_shape=shape, update_callback=_update_test, n_cores=1)
 
-    rt.start()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    test_ray_tracing()
+    test_make_unit_rays()
+    print("All tests passed.")

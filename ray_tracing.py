@@ -1,5 +1,10 @@
+"""
+Trace rays of light from the eye through the scope to the target plane.
+Runs in parallel on N cores.  Anti-aliasing optional.
+"""
+
 import time
-from multiprocessing import cpu_count, Pool
+from multiprocessing import cpu_count, Pool, Pipe
 from threading import Thread, Lock
 import logging
 import numpy as np
@@ -8,150 +13,117 @@ from mirrors_rectangle import RectangularPrism  # testing
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 
-DEBUGGING = True
+
+def make_unit_rays(shape, origin=(0.5, 0.5, 5.0)):
+    """
+    Make rays from the origin to the z=0 plane.
+        The rays spread so that they just cover the unit square, given the aspect ratio (with padding on the sides,
+        or top & bottom.)
+
+    (The value of z is unimportant, since the FOV angle scales opposite Z so the image always fits)
+
+    :param shape:  height, width of grid of rays
+    :param origin:  x, y, z  (no guarantees if z nonpositive)
+    :returns: h x w x 3 array of ray origins (all equal to the input origin)
+              h x w x 3 array of ray directions (unit).
+    """
+    origins = np.tile(np.array(origin), (shape[0], shape[1], 1))
+    if shape[0] > shape[1]:
+        # output image is portrait aspect
+        y_pad = (float(shape[0]) / float(shape[1]) - 1) / 2.
+        x_span = np.linspace(0.0, 1.0, shape[1])
+        y_span = np.linspace(-y_pad, 1. + y_pad, shape[0])
+    else:
+        # landscape aspect
+        x_pad = (float(shape[1]) / float(shape[0]) - 1) / 2.
+        x_span = np.linspace(-x_pad, 1. + x_pad, shape[1])
+        y_span = np.linspace(0., 1., shape[0])
+
+    x, y = np.meshgrid(x_span, y_span)
+    z = x * 0.0
+    directions = np.dstack([x, y, z])
+    magnitudes = np.linalg.norm(directions, axis=2, keepdims=True)
+    unit_directions = directions / magnitudes
+
+    return origins, unit_directions
 
 
-class RayTracer(object):
-    _NO_HIT_Z = -1.0  # real hits are positive (?)
-    _REL_TOL = 1e-6
+class ScopeTracer(object):
+    """
+    High-level ray-tracing manager:
+        1.  Initialize rays, set all to live.
+        2.  Break live rays into blocks for parallel tracing.
+        2.  Dispatch multi-processing low-level RayBlockTracer() to do each block
+        3.  Gather results as they come in (asynch.), collate & update callback.
+        4.  Find border-pixels to anti-alias & dispatch to RayBlockTracer() to render.
+    """
 
     def __init__(self,
                  mirrors,
                  output_shape,
-                 target_shape,
                  update_callback,
-                 n_cores=0,
-                 fov_deg_x=20.0):
+                 n_cores=0):
         """
+
         :param mirrors:  Mirrors() object, set of mirrors
-        :param img_shape:  H x W of output image, and of target for rays (i.e. camera image)
+        :param output_shape:  H x W of output image
+            Note, this defines the image plane.  The "world" coordinates have a unit square that just fits inside,
+            i.e. maps to the number of pixels in the shorter axis (vertical)
         :param update_callback:  function(new_map, stats) to call when results update
             new_map is dict{'mapping': HxW array, int64 of (single-index) locations of sources for each pixel,
                             'bounce_counts':  (same type) how many mirrors each ray hit
                             'distances':  (same dims, but float) how far each ray travelled}
-        :param n_cores: how many cores to use during distance calculations (1 = single process)
-        :param fov_deg_x:  Field of view along x-axis.
+        :param n_cores: how many cores to use during distance calculations (1 = single process, 0 = n_cores - 1)
         """
         self._mirrors = mirrors
-        self._n_cores = n_cores if n_cores != 0 else cpu_count() - 1  # save one for rendering?
-        logging.info("Ray-tracer created running with %i cores." % (self._n_cores,))
+        self._n_cores = n_cores if n_cores != 0 else cpu_count() - 1
+        logging.info("ScopeTracer() created running with %i cores." % (self._n_cores,))
         self._pool = Pool(processes=self._n_cores) if self._n_cores != -1 else None
         self._callback = update_callback
-        self._render_thread = Thread(target=self._trace)
+        self._pipe = Pipe(duplex=True)
 
-        # state
-        self._update_result_lock = Lock()
+        self._img_shape = output_shape
+
+        # self._update_result_lock = Lock()
         self._shutdown = False
 
         # Ray-tracing things
         self._bounce_index = 0
-        self._rays = None
-        self._mirror_surfaces = None  # things rays hit
-        self._fov = np.deg2rad(fov_deg_x)
-        self._target_shape = target_shape
-        self._img_shape = output_shape
-        self._target_aspect = float(target_shape[1]) / float(target_shape[0])
-        self._img_aspect = float(output_shape[1]) / float(output_shape[0])
+        self._ray_origins, self._ray_directions = make_unit_rays(self._img_shape, )
 
         # results
-        self._bounce_counts = np.zeros(self._img_shape, dtype=np.int64)  # how many bounces for each ray
-        self._ray_distances = np.zeros(self._img_shape, dtype=np.float64)  # how far did ray travel?
-        self._hit_xyz_coords = np.zeros((self._img_shape[0], self._img_shape[1], 3), dtype=np.float64) - 1.0
-        self._mapping = np.zeros(self._img_shape, dtype=np.int64)
-        self._stats = {'bounce_num': None,  # current bounce number
-                       'rays_hit': None,  # so far
-                       'ray_count': None}  # total
-
-    def _trace(self):
-        self._setup_geometry()
-        self._rays = RayBundle(shape=self._img_shape,
-                               direction=self._view_dir,
-                               z_dist=self._img_z,
-                               span=(self._img_w, self._img_h))
-
-        while not self._shutdown and self._rays.get_active_count() > 0:
-            logging.info("Ray-tracer main loop starting bounce number %i..." % (self._bounce_index,))
-            self._bounce()  # advance rays to next surface, accumulate results
-            self._callback(self.get_current_result(), self._stats)
-        logging.info("Ray-tracer main loop complete.")
-
-    def _setup_geometry(self, view_dir=(0.0, 0.0, 1.0), target_image_dist_m=1.0):
-        """
-        Determine scene layout:
-           Target image width/height, Such that image subtends full window w/o mirrors
-           Image plane distance, st. input & output match w/o mirrors
-
-        Then calculate initial rays, i.e. grid on image plane pointing away from origin.
-
-        """
-        # MAX_IMG_Z = 0.1  # artificial limit
-        max_ins_rad = self._mirrors.get_inscribed_radius(scaled=True)
-        # origin = np.array([0.0, 0.0, 0.0])  # focus, eyeball
-        self._target_z = target_image_dist_m
-        self._target_w = 2.0 * np.tan(self._fov / 2.0) / self._target_z
-        self._target_h = self._target_w / self._target_aspect
-        self._img_w = np.sqrt(max_ins_rad ** 2.0 / (0.25 + (self._target_h / self._target_w) ** 2.0))
-        self._img_h = self._img_w / self._img_aspect
-        self._img_z = self._img_w * (
-                self._target_z / self._target_w)  # when output rectangle just fits inscribed radius
-        self._view_dir = np.array(view_dir)
-
-    def _bounce(self):
-        all_surfs = [self._target_surface] + self._mirror_surfaces
-
-        # pairwise distance of all rays to all surfaces
-        distances = self._rays.get_distances_to_surfaces(all_surfs)  # n_rays x n_surfs
-        valid = distances >= 0
-        distances[np.logical_not(valid)] = np.Inf
-        all_invalid = np.sum(np.isInf(distances), axis=1).reshape(-1)
-        if np.sum(all_invalid) > 0:
-            raise Exception("Rays hitting nothing:  %s" % (np.sum(all_invalid),))
-        # what hit what?
-        hit_inds = np.argmin(distances, axis=1)
-        hit_lists = [np.where(hit_inds == i)[0] for i in range(len(all_surfs))]
-        targ_hits = hit_lists[0]
-
-        # reflect rays hitting mirrors
-        ground_intersections = None
-        for s_ind, surf in enumerate(all_surfs):
-
-            # should not depend on mirror arrangement, for debugging
-            distance_traveled = distances[targ_hits[s_ind]]
-            ray_indices = self._rays.get_ray_indices(targ_hits[s_ind])
-            self._ray_distances[ray_indices] += distance_traveled
-
-            intersections, surf_norms = surf.get_intersections_and_normals(self._rays.get_active_rays())
-            if s_ind == 0:
-                ground_intersections = intersections
-                continue  # don't reflect off target
-
-            # reflect non-target intersections (mirrors)
-            self._rays.reflect(surf_norms, intersections, mask=targ_hits[s_ind])
-
-        # collect rays hitting target
-        ray_indices = self._rays.get_ray_indices(targ_hits)
-
-        # update results
-        with self._update_result_lock:
-            self._bounce_counts[ray_indices] = self._n_bounce
-            self._target_plane_xyz_intersect[ray_indices] = ground_intersections
-            self._mapping = self._get_new_map()
-            self._stats = {'rays_hit': np.sum(self._hit_xyz_coords[:, :, 0] != self._NO_HIT_Z),
-                           'ray_count': np.prod(self._img_shape),
-                           'bounce_num': self._n_bounce}
+        self._active = np.tile(True, self._img_shape)  # Rays still bouncing
+        self._bounce_counts = np.zeros(self._img_shape, dtype=np.int64)  # how many bounces for each ray until it hit
+        self._ray_distances = np.zeros(self._img_shape, dtype=np.float64)  # how far did ray travel? (should be const)
+        self._hit_xy = np.zeros((self._img_shape[0], self._img_shape[1], 3), dtype=np.float64) - 1.0
 
     def start(self):
-        if not DEBUGGING:
-            self._render_thread.start()
-        else:
-            self._trace()
 
-    def get_current_result(self):
-        with self._update_result_lock:
-            return {'mapping': self._mapping.copy(),
-                    'bounce_counts': self._bounce_counts.copy(),
-                    'distances': self._ray_distances.copy(),
-                    }
+        while not self._shutdown and np.sum(self._active) > 0:
+            logging.info("Ray-tracer main loop starting bounce number %i." % (self._bounce_index,))
+            self._iterate()
+            self._callback(self.current_result())
+        logging.info("Ray-tracer main loop complete.")
+
+    def _iterate(self):
+        active = np.where(self._active)
+        n_active = active[0].size
+
+        # partition active rays into separate chunks for multiprocessing pool
+
+        partitions = [np.arange(n_active)]  # all one
+        if self._n_cores > 1:
+            partitions = np.array_split(partitions[0], self._n_cores)
+
+        work_units = [{'origins': self._ray_origins[part, :],
+                       'directions': self._ray_directions[part, :],
+                       'mirrors': self._mirrors} for part in partitions]
+
+        if self._n_cores == 1:
+            results = [_bounce(w) for w in work_units]   # single process
+        else:
+            results = self._pool.map(_bounce, work_units)  # multi process
+
 
     def shutdown(self):
         self._shutdown = True
@@ -179,8 +151,65 @@ class RayTracer(object):
         return mapping
 
 
-def unit_vecs(vecs):
-    return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
+    def get_current_result(self):
+        with self._update_result_lock:
+            return {'mapping': self._mapping.copy(),
+                    'bounce_counts': self._bounce_counts.copy(),
+                    'distances': self._ray_distances.copy(),
+                    }
+
+
+def _bounce(info):
+    """
+    Advance rays until they hit the next surface
+    :param info:  dict with:
+        'ray_origins':  N x 3 (x,y,z)
+        'ray_directions':  N x 3 (x,y,z)  unit
+        'mirrors':  MirrorPrism object
+    """
+    all_surfs = [self._target_surface] + self._mirror_surfaces
+
+    # pairwise distance of all rays to all surfaces
+    distances = self._rays.get_distances_to_surfaces(all_surfs)  # n_rays x n_surfs
+    valid = distances >= 0
+    distances[np.logical_not(valid)] = np.Inf
+    all_invalid = np.sum(np.isInf(distances), axis=1).reshape(-1)
+    if np.sum(all_invalid) > 0:
+        raise Exception("Rays hitting nothing:  %s" % (np.sum(all_invalid),))
+    # what hit what?
+    hit_inds = np.argmin(distances, axis=1)
+    hit_lists = [np.where(hit_inds == i)[0] for i in range(len(all_surfs))]
+    targ_hits = hit_lists[0]
+
+    # reflect rays hitting mirrors
+    ground_intersections = None
+    for s_ind, surf in enumerate(all_surfs):
+
+        # should not depend on mirror arrangement, for debugging
+        distance_traveled = distances[targ_hits[s_ind]]
+        ray_indices = self._rays.get_ray_indices(targ_hits[s_ind])
+        self._ray_distances[ray_indices] += distance_traveled
+
+        intersections, surf_norms = surf.get_intersections_and_normals(self._rays.get_active_rays())
+        if s_ind == 0:
+            ground_intersections = intersections
+            continue  # don't reflect off target
+
+        # reflect non-target intersections (mirrors)
+        self._rays.reflect(surf_norms, intersections, mask=targ_hits[s_ind])
+
+    # collect rays hitting target
+    ray_indices = self._rays.get_ray_indices(targ_hits)
+
+    # update results
+    with self._update_result_lock:
+        self._bounce_counts[ray_indices] = self._n_bounce
+        self._target_plane_xyz_intersect[ray_indices] = ground_intersections
+        self._mapping = self._get_new_map()
+        self._stats = {'rays_hit': np.sum(self._hit_xyz_coords[:, :, 0] != self._NO_HIT_Z),
+                       'ray_count': np.prod(self._img_shape),
+                       'bounce_num': self._n_bounce}
+
 
 
 class RayBundle(object):
