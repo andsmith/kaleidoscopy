@@ -17,6 +17,11 @@ class Plane(Surface):
         self._xyz = np.array(xyz_intersect).reshape(-1)
         self._normal = (normal / np.linalg.norm(normal)).reshape(-1)
 
+    @staticmethod
+    def z_zero_plane():
+        return Plane(np.array((0., 0., 0.)),
+                     np.array((0., 0., 1.)))
+
     def get_intersections_and_normals(self, origins, unit_directions, no_points=False):
         """
         Find intersection of rays with given plane.

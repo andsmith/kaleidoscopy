@@ -10,6 +10,7 @@ import logging
 import numpy as np
 from surfaces import Cylinder, Plane
 from mirrors_rectangle import RectangularPrism  # testing
+
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 
@@ -76,7 +77,7 @@ class ScopeTracer(object):
         :param n_cores: how many cores to use during distance calculations (1 = single process, 0 = n_cores - 1)
         """
         self._mirrors = mirrors
-        self._n_cores = n_cores if n_cores != 0 else cpu_count() - 1
+        self._n_cores = 1  ####n_cores if n_cores != 0 else cpu_count() - 1
         logging.info("ScopeTracer() created running with %i cores." % (self._n_cores,))
         self._pool = Pool(processes=self._n_cores) if self._n_cores != -1 else None
         self._callback = update_callback
@@ -97,19 +98,33 @@ class ScopeTracer(object):
         self._ray_distances = np.zeros(self._img_shape, dtype=np.float64)  # how far did ray travel? (should be const)
         self._hit_xy = np.zeros((self._img_shape[0], self._img_shape[1], 3), dtype=np.float64) - 1.0
 
-    def start(self):
+    def run(self):
 
         while not self._shutdown and np.sum(self._active) > 0:
             logging.info("Ray-tracer main loop starting bounce number %i." % (self._bounce_index,))
-            self._iterate()
-            self._callback(self.current_result())
-        logging.info("Ray-tracer main loop complete.")
+            if self._iterate():
+                logging.info("Ray-tracing iterate() returned no active rays.")
+                break
+            self._callback(self.get_current_result())
+        logging.info("Ray-tracer main mapping complete.")
+
+        # ## implement anti-aliasing here
+        # Find pixels on borders of contiguous regions.
+        # Send AA rays through those pixels
 
     def _iterate(self):
+        """
+        Advance rays to next surface:  Divide work into multiprocessing units & collect results
+        :return: True, if no remaining rays are active at the beginning of the iteration.
+        """
         active = np.where(self._active)
         n_active = active[0].size
+        if n_active == 0:
+            return True
 
         # partition active rays into separate chunks for multiprocessing pool
+        import ipdb;
+        ipdb.set_trace()
 
         partitions = [np.arange(n_active)]  # all one
         if self._n_cores > 1:
@@ -120,14 +135,19 @@ class ScopeTracer(object):
                        'mirrors': self._mirrors} for part in partitions]
 
         if self._n_cores == 1:
-            results = [_bounce(w) for w in work_units]   # single process
+            results = [_bounce(w) for w in work_units]  # single process
         else:
             results = self._pool.map(_bounce, work_units)  # multi process
 
+        for result, part in zip(results, partitions):
+            self._ray_origins[part, :] = result['origins']
+            self._ray_origins[part, :] = result['directions']
+            self._ray_origins[part, :] = result['hits']
 
     def shutdown(self):
         self._shutdown = True
 
+    """
     def _get_new_map(self):
         where_hits = np.where(self._hit_xyz_coords[:, :, 2] != self._NO_HIT_Z)
         hits_xyz = self._hit_xyz_coords[where_hits]
@@ -149,14 +169,13 @@ class ScopeTracer(object):
         mapping[(hits_i[valid], hits_j[valid])] = xy_scaled[valid]
         mapping[(hits_i[invalid], hits_j[invalid])] = 0
         return mapping
-
+    """
 
     def get_current_result(self):
-        with self._update_result_lock:
-            return {'mapping': self._mapping.copy(),
-                    'bounce_counts': self._bounce_counts.copy(),
-                    'distances': self._ray_distances.copy(),
-                    }
+        return {'mapping': self._hit_xy.copy(),
+                'bounce_counts': self._bounce_counts.copy(),
+                'distances': self._ray_distances.copy(),
+                }
 
 
 def _bounce(info):
@@ -167,19 +186,22 @@ def _bounce(info):
         'ray_directions':  N x 3 (x,y,z)  unit
         'mirrors':  MirrorPrism object
     """
-    all_surfs = [self._target_surface] + self._mirror_surfaces
+    mirrors = info['mirrors']
+    origins, directions = info['origins'], info['directions']
+    surfs = mirrors.get_planes()
+    surfs.append(Plane.z_zero_plane()) # ground
 
     # pairwise distance of all rays to all surfaces
-    distances = self._rays.get_distances_to_surfaces(all_surfs)  # n_rays x n_surfs
+    distances = _distances_to_surfaces(surfs, origins, directions)  # n_rays x n_surfs + Target (z=0)
     valid = distances >= 0
     distances[np.logical_not(valid)] = np.Inf
     all_invalid = np.sum(np.isInf(distances), axis=1).reshape(-1)
     if np.sum(all_invalid) > 0:
-        raise Exception("Rays hitting nothing:  %s" % (np.sum(all_invalid),))
+        raise Exception("This many rays hit nothing:  %s (should be zero)" % (np.sum(all_invalid),))
     # what hit what?
     hit_inds = np.argmin(distances, axis=1)
-    hit_lists = [np.where(hit_inds == i)[0] for i in range(len(all_surfs))]
-    targ_hits = hit_lists[0]
+    hit_lists = [np.where(hit_inds == i)[0] for i in range(mirrors.get_n() + 1)]
+    targ_hits = hit_lists[-1]
 
     # reflect rays hitting mirrors
     ground_intersections = None
@@ -202,14 +224,12 @@ def _bounce(info):
     ray_indices = self._rays.get_ray_indices(targ_hits)
 
     # update results
-    with self._update_result_lock:
-        self._bounce_counts[ray_indices] = self._n_bounce
-        self._target_plane_xyz_intersect[ray_indices] = ground_intersections
-        self._mapping = self._get_new_map()
-        self._stats = {'rays_hit': np.sum(self._hit_xyz_coords[:, :, 0] != self._NO_HIT_Z),
-                       'ray_count': np.prod(self._img_shape),
-                       'bounce_num': self._n_bounce}
-
+    self._bounce_counts[ray_indices] = self._n_bounce
+    self._target_plane_xyz_intersect[ray_indices] = ground_intersections
+    self._mapping = self._get_new_map()
+    self._stats = {'rays_hit': np.sum(self._hit_xyz_coords[:, :, 0] != self._NO_HIT_Z),
+                   'ray_count': np.prod(self._img_shape),
+                   'bounce_num': self._n_bounce}
 
 
 class RayBundle(object):

@@ -11,6 +11,7 @@ class IsoscelesPrism(MirrorPrism):
         """
         default is 30 degree wedge.
         """
+        self._n = 3
         self._theta = np.deg2rad(15.0)
         super(IsoscelesPrism, self).__init__()
 

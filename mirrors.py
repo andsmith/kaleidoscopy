@@ -46,6 +46,27 @@ def clamped_adjust(value, increment, bounds):
     return value
 
 
+"""
+def _get_normals_from_points(c1, c2, c3):
+    Plane normals from three non-collinear points in the plane.
+    Oriented so clockwise points away from the clock.
+
+    :param c1: (x,y,z) point in plane
+    :param c2: (x,y,z) point in plane, not equal to c1
+    :param c3: (x,y,z) point in plane, not on line c2-c1
+    :return: (x,y,z) normal pointing "up"
+    n = 3 if len(c1.shape) == 1 else 2
+
+    co_planar_a = c2 - c1  # right-hand rule, to point inward ...
+    co_planar_b = c3 - c1
+    normals = np.cross(co_planar_a, co_planar_b)
+    normals /= np.linalg.norm(normals)
+    return normals
+
+
+"""
+
+
 class MirrorPrism(ABC):
     """
     Abstract class to handle geometry.
@@ -55,6 +76,9 @@ class MirrorPrism(ABC):
                             " SHIFT + Left-click + Drag up-and-down:  aperture"]
 
     def __init__(self):
+        if not hasattr(self, '_n'):
+            raise Exception("MirrorPrism subclasses should set self._n before calling super().__init__()")
+
         self._aperture_scale = 1.0  # largest to start
         self._old_aperture_scale = None  # hold value while user adjusts
         self._shaping_finish_event = None
@@ -69,6 +93,7 @@ class MirrorPrism(ABC):
         """
         Get "raw" 2d vertices of mirror corners, unscaled by aperture size, just defined by shape customization params.
         (i.e. should be largest, at scale 1.0, and inscribed in unit square)
+
         """
         pass
 
@@ -86,6 +111,38 @@ class MirrorPrism(ABC):
         # when aperture is maximum, unit square fills window.
         scaled = (unscaled - center) * self._aperture_scale + center
         return scaled
+
+    def get_n(self):
+        """Number of mirrors"""
+        if self._n is None:
+            raise Exception
+        return self._n
+
+    def get_planes(self, include_ground=True):
+        """
+        Get Plane() objects for each mirror
+        """
+        points = self.get_scaled_shape()
+        points = np.vstack([points, points[-1, :]])
+
+        if np.isinf(self._n):
+            raise Exception("Don't get 3d surfaces of a curved mirror.")
+
+        mids, norms = [], []
+        for ind in range(self._n):
+            midpoint = (points[ind, :] + points[ind + 1, :]) / 2.0
+            forward_delta = points[ind+1,:] - midpoint
+            upward_delta = np.array([0.0, 0.0, 1.0])
+            perp = np.cross(forward_delta, upward_delta)
+            if np.abs(perp[2])>1e-8:
+                raise Exception("Mirror surface normal should not have z-component.")
+            perp /= np.linalg.norm(perp)
+
+            mids.append(midpoint)
+            norms.append(perp)
+        return np.array(mids), np.array(norms)
+
+
 
     '''
     def get_surfaces(self):
@@ -409,24 +466,6 @@ def max_inscribed_circle(corners):
     r = -error_fn(pos)
     return pos, r
 
-
-def _get_normals_from_points(c1, c2, c3):
-    """
-    Plane normals from three non-collinear points in the plane.
-    Oriented so clockwise points away from the clock.
-
-    :param c1: (x,y,z) point in plane
-    :param c2: (x,y,z) point in plane, not equal to c1
-    :param c3: (x,y,z) point in plane, not on line c2-c1
-    :return: (x,y,z) normal pointing "up"
-    """
-    n = 3 if len(c1.shape) == 1 else 2
-
-    co_planar_a = c2 - c1  # right-hand rule, to point inward ...
-    co_planar_b = c3 - c1
-    normals = np.cross(co_planar_a, co_planar_b)
-    normals /= np.linalg.norm(normals)
-    return normals
 
 
 def plot_3d_polygon(corners, ax, color=(0.1, .15, 1.0, .5), **kwargs):

@@ -32,7 +32,7 @@ class NGonPrism(MirrorPrism):
         center = np.array([0.5, 0.5]).reshape(1, 2)
         theta = np.linspace(self._phi, np.pi * 2 + self._phi, self._n, endpoint=False)
         points = np.array([(np.cos(t), np.sin(t)) for t in theta]) * r + center
-        return points
+        return points[::-1,:]  # clockwise
 
     def _mouse_adjust(self, pos, d_pos, d_button, button_state, keyboard_state):
 

@@ -21,6 +21,7 @@ class CirclePrism(MirrorPrism):
     def __init__(self):
         """
         """
+        self._n = np.inf
         super(CirclePrism, self).__init__()
 
     SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS
