@@ -1,3 +1,6 @@
+"""
+Classes to handle geometry of light bouncing off mirrors.
+"""
 from abc import ABC, abstractmethod
 import numpy as np
 
@@ -8,8 +11,27 @@ class Surface(ABC):
         pass
 
     @abstractmethod
-    def get_intersections_and_normals(self, origins, unit_directions):
+    def get_ray_intersections(self, origins, unit_directions):
+        """
+        Find intersection points of rays with surface.
+        Note: no check is done to see if the intersection is in the positive direction (dists>0).
+
+        :param origins:  N x 3 array of ray origin points
+        :param unit_directions:  N x 3 array of ray direction vectors
+        :return:  N x 3 intersection points for N active rays,
+                  N array of distances to points (possibly negative)
+        """
         pass
+
+    @abstractmethod
+    def get_ray_reflections(self, origins, unit_directions):
+        """
+        Find direction of rays reflected off surface.
+
+        :param origins: N x 2 array of ray origin points
+        :param unit_directions:  N x 3 array of ray directions
+        :returns:  N x 3 array of new ray directions.  (new origins are intersection points)
+        """
 
 
 class Plane(Surface):
@@ -18,28 +40,28 @@ class Plane(Surface):
         self._normal = (normal / np.linalg.norm(normal)).reshape(-1)
 
     @staticmethod
-    def z_zero_plane():
+    def make_z_zero_plane():
+        """
+        Special Plane at z=0 (target plane of rays)
+        """
         return Plane(np.array((0., 0., 0.)),
                      np.array((0., 0., 1.)))
 
-    def get_intersections_and_normals(self, origins, unit_directions, no_points=False):
-        """
-        Find intersection of rays with given plane.
-        :param origins:  Nx 3 array of ray origin points
-        :param unit_directions:  N x 3 array of ray direction vectors
-        :param no_points:  just calculate distance, not intersection points
-        :return: N distances for N active rays,
-                 N x 3 intersection points for N active rays, or None if no_points is True.
-        """
-
+    def get_ray_intersections(self, origins, unit_directions):
         with np.errstate(divide='ignore', invalid='ignore'):
             # parallel rays go to np.inf, pointing away are negative
             dists = np.dot(self._xyz - origins, self._normal) / np.dot(unit_directions, self._normal)
         dists = dists.reshape(-1, 1)
-        points = None
-        if not no_points:
-            points = origins + dists * unit_directions
-        return dists, points
+        points = origins + dists * unit_directions
+        return points, dists
+
+    def get_ray_reflections(self, origins, unit_directions):
+        # new direction has component parallel to normal reversed
+        delta = - 2.0 * np.dot(unit_directions, self._normal).reshape(-1, 1) \
+                * self._normal.reshape(1, 3)
+        new_directions = unit_directions + delta
+
+        return new_directions
 
 
 class Cylinder(Surface):
@@ -48,5 +70,8 @@ class Cylinder(Surface):
         self._xy_radius = xy_rad
         self._axis = np.array([0.0, 0.0, 1.0])
 
-    def get_intersections_and_normals(self, origins, unit_directions):
+    def get_ray_reflections(self, origins, unit_directions):
+        raise NotImplementedError("Cylindrical mirrors not implemented yet.")
+
+    def get_ray_intersections(self, origins, unit_directions):
         raise NotImplementedError("Cylindrical mirrors not implemented yet.")

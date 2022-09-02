@@ -189,3 +189,18 @@ def make_bounds(coords):
 def test_image():
     pic = Image.from_file('test_img.jpg')
 
+
+
+def ray_intersect_circle(origin, direction, center, radius):
+    """
+    See if ray(s) hit a given circle, find intersection, etc.
+    :param origin: of ray
+    :param direction: of ray
+    :param center: of circle
+    :param radius: of circle
+    """
+
+    a = np.sum(direction**2.)
+    b = 2. * np.sum(origin * direction - center * direction)
+    c = (origin)
+    raise NotImplementedError("Not done.")

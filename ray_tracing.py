@@ -8,11 +8,7 @@ from multiprocessing import cpu_count, Pool, Pipe
 from threading import Thread, Lock
 import logging
 import numpy as np
-from surfaces import Cylinder, Plane
-from mirrors_rectangle import RectangularPrism  # testing
-
-from scipy.spatial.transform import Rotation
-import matplotlib.pyplot as plt
+from surfaces import Plane
 
 
 def make_unit_rays(shape, origin=(0.5, 0.5, 5.0)):
@@ -45,7 +41,6 @@ def make_unit_rays(shape, origin=(0.5, 0.5, 5.0)):
     directions = np.dstack([x, y, z])
     magnitudes = np.linalg.norm(directions, axis=2, keepdims=True)
     unit_directions = directions / magnitudes
-
     return origins, unit_directions
 
 
@@ -54,8 +49,7 @@ class ScopeTracer(object):
     High-level ray-tracing manager:
         1.  Initialize rays, set all to live.
         2.  Break live rays into blocks for parallel tracing.
-        2.  Dispatch multi-processing low-level RayBlockTracer() to do each block
-        3.  Gather results as they come in (asynch.), collate & update callback.
+        2.  Bounce blocks of rays in parallel using multiprocessing.Pool
         4.  Find border-pixels to anti-alias & dispatch to RayBlockTracer() to render.
     """
 
@@ -91,30 +85,59 @@ class ScopeTracer(object):
         # Ray-tracing things
         self._bounce_index = 0
         self._ray_origins, self._ray_directions = make_unit_rays(self._img_shape, )
+        self._ray_origins = self._ray_origins.reshape((-1, 3))
+        self._ray_directions = self._ray_directions.reshape((-1, 3))
+        self._n_rays = np.prod(self._img_shape)
 
         # results
-        self._active = np.tile(True, self._img_shape)  # Rays still bouncing
-        self._bounce_counts = np.zeros(self._img_shape, dtype=np.int64)  # how many bounces for each ray until it hit
-        self._ray_distances = np.zeros(self._img_shape, dtype=np.float64)  # how far did ray travel? (should be const)
-        self._hit_xy = np.zeros((self._img_shape[0], self._img_shape[1], 3), dtype=np.float64) - 1.0
+        self._active = np.tile(True, self._n_rays)  # Rays still bouncing
+        self._bounce_counts = np.zeros(self._n_rays, dtype=np.int64)  # how many bounces for each ray until it hit
+        self._ray_distances = np.zeros(self._n_rays,
+                                       dtype=np.float64)  # how far did ray travel? (should be independent of mirrors)
+        self._hit_xyz = np.zeros((self._n_rays, 3), dtype=np.float64) - 1.0  # z should be zero...
 
     def run(self):
 
         while not self._shutdown and np.sum(self._active) > 0:
             logging.info("Ray-tracer main loop starting bounce number %i." % (self._bounce_index,))
+
             if self._iterate():
                 logging.info("Ray-tracing iterate() returned no active rays.")
                 break
             self._callback(self.get_current_result())
-        logging.info("Ray-tracer main mapping complete.")
+        logging.info("Ray-tracer main mapping completed in %i iterations." % (self._bounce_index,))
 
         # ## implement anti-aliasing here
         # Find pixels on borders of contiguous regions.
         # Send AA rays through those pixels
 
     def _iterate(self):
+
+        active = np.where(self._active)[0]
+        n_active = active.size
+        if n_active == 0:
+            return True
+
+        result = _bounce(self._mirrors, self._ray_origins[active, :], self._ray_distances[active, :])
+
+        target_hit_inds = active[result['hit_mask']]
+        remaining_active_inds = active[np.logical_not(result['hit_mask'])]
+
+        self._hit_xyz[target_hit_inds, :] = result['target_hits_xyz']
+        self._ray_origins[remaining_active_inds] = result['new_ray_origins']
+        self._ray_directions[remaining_active_inds] = result['new_ray_dirctions']
+
+        self._active[target_hit_inds] = False
+        logging.info("\tRay-tracing iteration %i ending with %i / %i rays active (%.3f %%)",
+                     self._bounce_index,
+                     np.sum(self._active), self._active.size,
+                     100 * np.mean(self._active))
+
+    def _iterate_multiprocessing(self):
         """
-        Advance rays to next surface:  Divide work into multiprocessing units & collect results
+        Do a ray-tracing iteration, i.e. advance rays to next surface:  Divide work into multiprocessing units &
+         collect results.
+
         :return: True, if no remaining rays are active at the beginning of the iteration.
         """
         active = np.where(self._active)
@@ -123,15 +146,12 @@ class ScopeTracer(object):
             return True
 
         # partition active rays into separate chunks for multiprocessing pool
-        import ipdb;
-        ipdb.set_trace()
-
         partitions = [np.arange(n_active)]  # all one
         if self._n_cores > 1:
             partitions = np.array_split(partitions[0], self._n_cores)
 
-        work_units = [{'origins': self._ray_origins[part, :],
-                       'directions': self._ray_directions[part, :],
+        work_units = [{'origins': self._ray_origins[(part,), :],
+                       'directions': self._ray_directions[(part,), :],
                        'mirrors': self._mirrors} for part in partitions]
 
         if self._n_cores == 1:
@@ -140,36 +160,14 @@ class ScopeTracer(object):
             results = self._pool.map(_bounce, work_units)  # multi process
 
         for result, part in zip(results, partitions):
-            self._ray_origins[part, :] = result['origins']
-            self._ray_origins[part, :] = result['directions']
-            self._ray_origins[part, :] = result['hits']
+            hit_subset_indices = part[result['hit_subset_indices']]
+            self._ray_origins[(part,), :] = result['origins']
+            self._ray_directions[(part,), :] = result['directions']
+            self._hit_xyz[(hit_subset_indices,), :] = result['hit_xyz_locations']
+            self._bounce_counts[(hit_subset_indices,), :] = self._bounce_index
 
     def shutdown(self):
         self._shutdown = True
-
-    """
-    def _get_new_map(self):
-        where_hits = np.where(self._hit_xyz_coords[:, :, 2] != self._NO_HIT_Z)
-        hits_xyz = self._hit_xyz_coords[where_hits]
-        hits_i = hits_xyz[0]
-        hits_j = hits_xyz[1]
-
-        x_scaled = self._hit_xyz_coords[hits_i, 0] * self._target_xy_scale[0] + (self._img_shape[1] / 2.0)
-        y_scaled = self._hit_xyz_coords[hits_j, 1] * self._target_xy_scale[1] + (self._img_shape[0] / 2.0)
-
-        valid = np.logical_and(np.logical_and(x_scaled >= 0, x_scaled < self._img_shape[1]),
-                               np.logical_and(y_scaled >= 0, y_scaled < self._img_shape[0]), )
-        invalid = np.logical_not(valid)
-        hits_i = hits_i[valid]
-        hits_j = hits_j[valid]
-        x_scaled = np.int64(x_scaled)
-        y_scaled = np.ing64(y_scaled)
-        xy_scaled = x_scaled + y_scaled * self._img_shape[0]
-        mapping = np.zeros(self._img_shape, dtype=np.int64)
-        mapping[(hits_i[valid], hits_j[valid])] = xy_scaled[valid]
-        mapping[(hits_i[invalid], hits_j[invalid])] = 0
-        return mapping
-    """
 
     def get_current_result(self):
         return {'mapping': self._hit_xy.copy(),
@@ -178,7 +176,24 @@ class ScopeTracer(object):
                 }
 
 
-def _bounce(info):
+def _intersect_all_surfaces_all_rays(surfaces, ray_origins, ray_directions):
+    """
+    Gets the distances  of all rays to all surfaces
+    :param surfaces:  list of S Surface objects
+    :param ray_origins:  N x 3 array of ray starting points
+    :param ray_directions:  N x 3 array of ray unit directions
+    :returns: S x N distances, all rays to all surfaces,
+             List of S x N x 3 , all ray intersections for each surface
+    """
+    intersections_distances = [surf.get_ray_intersections(ray_origins, ray_directions, no_points=True)[1]
+                               for surf in surfaces]
+
+    intersections = np.stack([inter_dist[0] for inter_dist in intersections_distances])
+    distances = np.stack([inter_dist[1] for inter_dist in intersections_distances])
+    return intersections, distances
+
+
+def _bounce(mirrors, origins, directions):
     """
     Advance rays until they hit the next surface
     :param info:  dict with:
@@ -186,51 +201,41 @@ def _bounce(info):
         'ray_directions':  N x 3 (x,y,z)  unit
         'mirrors':  MirrorPrism object
     """
-    mirrors = info['mirrors']
-    origins, directions = info['origins'], info['directions']
+    # mirrors = info['mirrors']
+    # origins, directions = info['origins'], info['directions']
     surfs = mirrors.get_planes()
-    surfs.append(Plane.z_zero_plane()) # ground
+    surfs.append(Plane.make_z_zero_plane())  # ground at the end
 
     # pairwise distance of all rays to all surfaces
-    distances = _distances_to_surfaces(surfs, origins, directions)  # n_rays x n_surfs + Target (z=0)
+    intersections, distances = _intersect_all_surfaces_all_rays(surfs, origins, directions)
     valid = distances >= 0
     distances[np.logical_not(valid)] = np.Inf
-    all_invalid = np.sum(np.isInf(distances), axis=1).reshape(-1)
+    all_invalid = np.sum(np.isInf(distances), axis=0).reshape(-1)
     if np.sum(all_invalid) > 0:
-        raise Exception("This many rays hit nothing:  %s (should be zero)" % (np.sum(all_invalid),))
+        raise Exception("This many rays hit nothing:  %s (all rays should hit something!)" % (np.sum(all_invalid),))
+
     # what hit what?
-    hit_inds = np.argmin(distances, axis=1)
+    hit_inds = np.argmin(distances, axis=0)
     hit_lists = [np.where(hit_inds == i)[0] for i in range(mirrors.get_n() + 1)]
     targ_hits = hit_lists[-1]
 
-    # reflect rays hitting mirrors
-    ground_intersections = None
-    for s_ind, surf in enumerate(all_surfs):
+    result = {'new_ray_origins': origins * np.NaN,  # should all be non-nan (for rays not hitting ground) by the end
+              'new_ray_directions': directions * np.NaN}
 
-        # should not depend on mirror arrangement, for debugging
-        distance_traveled = distances[targ_hits[s_ind]]
-        ray_indices = self._rays.get_ray_indices(targ_hits[s_ind])
-        self._ray_distances[ray_indices] += distance_traveled
+    for s_ind, surf in enumerate(surfs):
+        hitting_subset = targ_hits == s_ind
 
-        intersections, surf_norms = surf.get_intersections_and_normals(self._rays.get_active_rays())
-        if s_ind == 0:
-            ground_intersections = intersections
-            continue  # don't reflect off target
+        if s_ind == len(surfs) - 1:
+            # rays hitting target get saved
+            result['ground_hit_xyz_locations'] = intersections[hitting_subset, :]
+            result['ground_hit_subset'] = np.where(hitting_subset)
+        else:
+            # rays hitting mirror get reflected
+            result['new_ray_origins'][hitting_subset, :] = intersections[hitting_subset, :]
+            result['new_ray_directions'][hitting_subset, :] = surf.get_ray_reflections(origins[hitting_subset, :],
+                                                                                       directions[hitting_subset, :], )
 
-        # reflect non-target intersections (mirrors)
-        self._rays.reflect(surf_norms, intersections, mask=targ_hits[s_ind])
-
-    # collect rays hitting target
-    ray_indices = self._rays.get_ray_indices(targ_hits)
-
-    # update results
-    self._bounce_counts[ray_indices] = self._n_bounce
-    self._target_plane_xyz_intersect[ray_indices] = ground_intersections
-    self._mapping = self._get_new_map()
-    self._stats = {'rays_hit': np.sum(self._hit_xyz_coords[:, :, 0] != self._NO_HIT_Z),
-                   'ray_count': np.prod(self._img_shape),
-                   'bounce_num': self._n_bounce}
-
+'''
 
 class RayBundle(object):
     """
@@ -275,29 +280,6 @@ class RayBundle(object):
     def get_active_count(self):
         return self._active.size
 
-    def reflect(self, intersections, plane_normal, subset_mask=None):
-
-        if subset_mask is None:
-            indices = self._active
-        else:
-            indices = self._active[subset_mask]
-
-        # new origin is just intersection point
-        new_origins = intersections.reshape(-1, 3)
-
-        # new direction has component parallel to normal reversed
-        dirs = self._ray_directions[indices]
-        delta = - 2.0 * np.dot(dirs, plane_normal).reshape(-1, 1) * plane_normal.reshape(1, 3)
-        new_directions = dirs + delta
-        new_directions /= np.linalg.norm(new_directions, axis=1, keepdims=True)
-
-        # get distance traveled for this update
-        distances = np.linalg.norm(self._ray_origins[indices] - new_origins, axis=1)
-
-        self._ray_origins[indices] = new_origins
-        self._ray_directions[indices] = new_directions
-        return distances
-
     def plot_3d(self, length=0.1, color=(0., 0., 0., 0.8), ax=None):
         """
         Plot lines from ray origins to distances.
@@ -328,7 +310,6 @@ class RayBundle(object):
 
         return handle, ax
 
-    '''
     def get_prism_intersections(self, prism, **kwargs):
         """
         Intersection distance from ACTIVE rays to each face of prism
