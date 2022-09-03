@@ -69,7 +69,12 @@ class KScopyApp(object):
         self._renderer = ImageMapper(self._input_shape, self._output_shape)
 
         # User shapes mirror parameters
-        self._user_shape_mirrors()
+        if not self._user_shape_mirrors():
+            return
+
+        # clear callback
+        cv2.setMouseCallback(self._window_name, lambda *args: None)
+
         self._ray_tracer = None  # ScopeTracer(mirrors=self._mirrors,
         #                               output_shape=self._output_shape,  # "output" = produced image/mapping
         #                               update_callback=self._update_k_map)  #
@@ -104,16 +109,14 @@ class KScopyApp(object):
     def _user_shape_mirrors(self):
         """
         User sets parameters of selected mirror arrangement.
+        :returns: results of the wait() call at the end (True, unless app was shut down during the wait.)
         """
         self._state = KScopeState.shaping  # now camera frames go to shaping method of prism
         shaping_instructions, mouse_callback = self._mirrors.start_shaping(self._window_name, self._waiter)
         self._pending_mouse_callback = mouse_callback  # needs to be registered in same thread as imshow
         self._status_bar.clear()
         self._status_bar.add_msgs(shaping_instructions, "shaping")
-
-        self._wait()  # for user to finish
-        logging.info("Done waiting for shaping")
-        cv2.setMouseCallback(self._window_name, lambda *args: None)  # clear callback
+        return self._wait()  # for user to finish
 
     def _toggle_osd(self):
         self._OSD_on = not self._OSD_on
@@ -122,7 +125,7 @@ class KScopyApp(object):
         self._state = KScopeState.shutdown
         cv2.destroyAllWindows()
         self._cam.shutdown()
-        if self._ray_tracer is not None:
+        if hasattr(self, '_ray_tracer') and self._ray_tracer is not None:
             self._ray_tracer.shutdown()
         print("Main._shutdown() done.")
 
@@ -133,6 +136,11 @@ class KScopyApp(object):
         self._k_map = img_map
 
     def _wait(self):
+        """
+        Waits for self._waiter (an Event object) to be set.
+        For pausing for user input, etc.
+        :returns:  True at the end, or False if app was shut down during the wait.
+        """
         logging.info("Waiting...")
         self._waiter.clear()
         while self._state != KScopeState.shutdown:
@@ -140,7 +148,9 @@ class KScopyApp(object):
                 break
         logging.info("Done waiting.")
         if self._state == KScopeState.shutdown:
-            raise ShutdownException("App shut down during wait.")
+            logging.info("App shut down during wait()")
+            return False
+        return True
 
     def _proc_frame(self, in_frame, frame_time):
         """
