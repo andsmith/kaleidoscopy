@@ -11,39 +11,6 @@ import numpy as np
 from surfaces import Plane
 
 
-def make_unit_rays(shape, origin=(0.5, 0.5, 5.0)):
-    """
-    Make rays from the origin to the z=0 plane.
-        The rays spread so that they just cover the unit square, given the aspect ratio (with padding on the sides,
-        or top & bottom.)
-
-    (The value of z is unimportant, since the FOV angle scales opposite Z so the image always fits)
-
-    :param shape:  height, width of grid of rays
-    :param origin:  x, y, z  (no guarantees if z nonpositive)
-    :returns: h x w x 3 array of ray origins (all equal to the input origin)
-              h x w x 3 array of ray directions (unit).
-    """
-    origins = np.tile(np.array(origin), (shape[0], shape[1], 1))
-    if shape[0] > shape[1]:
-        # output image is portrait aspect
-        y_pad = (float(shape[0]) / float(shape[1]) - 1) / 2.
-        x_span = np.linspace(0.0, 1.0, shape[1])
-        y_span = np.linspace(-y_pad, 1. + y_pad, shape[0])
-    else:
-        # landscape aspect
-        x_pad = (float(shape[1]) / float(shape[0]) - 1) / 2.
-        x_span = np.linspace(-x_pad, 1. + x_pad, shape[1])
-        y_span = np.linspace(0., 1., shape[0])
-
-    x, y = np.meshgrid(x_span, y_span)
-    z = x * 0.0
-    directions = np.dstack([x, y, z])
-    magnitudes = np.linalg.norm(directions, axis=2, keepdims=True)
-    unit_directions = directions / magnitudes
-    return origins, unit_directions
-
-
 class ScopeTracer(object):
     """
     High-level ray-tracing manager:
@@ -73,7 +40,7 @@ class ScopeTracer(object):
         self._mirrors = mirrors
         self._n_cores = 1  ####n_cores if n_cores != 0 else cpu_count() - 1
         logging.info("ScopeTracer() created running with %i cores." % (self._n_cores,))
-        self._pool = Pool(processes=self._n_cores) if self._n_cores != -1 else None
+        self._pool = Pool(processes=self._n_cores) if self._n_cores > 1 else None
         self._callback = update_callback
         self._pipe = Pipe(duplex=True)
 
@@ -176,6 +143,40 @@ class ScopeTracer(object):
                 }
 
 
+def make_unit_rays(shape, origin=(0.5, 0.5, 5.0)):
+    """
+    Make rays from the origin to the z=0 plane.
+        The rays spread so that they just cover a unit square, given the aspect ratio (with padding on the sides,
+        or top & bottom as required.)
+
+    (The value of z is unimportant, since the FOV angle scales opposite Z so the image always fits)
+
+    :param shape:  height, width of grid of rays
+    :param origin:  x, y, z  (no guarantees if z nonpositive)
+    :returns: h x w x 3 array of ray origins (all equal to the input origin)
+              h x w x 3 array of ray directions (unit).
+    """
+
+    origins = np.tile(np.array(origin), (shape[0], shape[1], 1))
+    if shape[0] > shape[1]:
+        # output image is portrait aspect
+        y_pad = (float(shape[0]) / float(shape[1]) - 1) / 2.
+        x_span = np.linspace(-.5, .5, shape[1])
+        y_span = np.linspace(-.5 - y_pad, .5 + y_pad, shape[0])
+    else:
+        # landscape aspect
+        x_pad = (float(shape[1]) / float(shape[0]) - 1) / 2.
+        x_span = np.linspace(-.5 - x_pad, .5 + x_pad, shape[1])
+        y_span = np.linspace(-.5, .5, shape[0])
+
+    x, y = np.meshgrid(x_span, y_span)
+    z = x * 0.0 + 2.0
+    directions = np.dstack([x, y, z])
+    magnitudes = np.linalg.norm(directions, axis=2, keepdims=True)
+    unit_directions = directions / magnitudes
+    return origins, unit_directions
+
+
 def _intersect_all_surfaces_all_rays(surfaces, ray_origins, ray_directions):
     """
     Gets the distances  of all rays to all surfaces
@@ -234,6 +235,7 @@ def _bounce(mirrors, origins, directions):
             result['new_ray_origins'][hitting_subset, :] = intersections[hitting_subset, :]
             result['new_ray_directions'][hitting_subset, :] = surf.get_ray_reflections(origins[hitting_subset, :],
                                                                                        directions[hitting_subset, :], )
+
 
 '''
 
