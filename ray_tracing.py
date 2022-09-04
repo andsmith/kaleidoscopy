@@ -170,7 +170,7 @@ def make_unit_rays(shape, origin=(0.5, 0.5, 5.0)):
         y_span = np.linspace(-.5, .5, shape[0])
 
     x, y = np.meshgrid(x_span, y_span)
-    z = x * 0.0 + 2.0
+    z = x * 0.0 - 2.0  # z only really matters for a side-view visualization
     directions = np.dstack([x, y, z])
     magnitudes = np.linalg.norm(directions, axis=2, keepdims=True)
     unit_directions = directions / magnitudes
