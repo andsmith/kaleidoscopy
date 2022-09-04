@@ -5,7 +5,7 @@ import logging
 import time
 # from util import make_bounds, TextManager, Image
 from threading import Lock, Event, enumerate, get_ident, Thread
-# from ray_tracing import RayTracer
+from ray_tracing import ScopeTracer
 from prisms import PRISMS
 from enum import Enum
 from gui_utils.gui_picker import ChooseItemDialog
@@ -74,17 +74,16 @@ class KScopyApp(object):
 
         # clear callback
         cv2.setMouseCallback(self._window_name, lambda *args: None)
-
-        self._ray_tracer = None  # ScopeTracer(mirrors=self._mirrors,
-        #                               output_shape=self._output_shape,  # "output" = produced image/mapping
-        #                               update_callback=self._update_k_map)  #
+        self._ray_tracer =  ScopeTracer(mirrors=self._mirrors,
+                                      output_shape=self._output_shape,  # "output" = produced image/mapping
+                                       update_callback=self._update_k_map)  #
 
         # Start raytracing and rendering
         print("Starting Raytracer and Scope...")
         self._state = KScopeState.ray_tracing
 
         # setup main OSD (params may differ from OSD during mirror shaping)
-        self._status_bar.set_image_shape(self._output_shape)
+        ###self._status_bar.set_image_shape(self._output_shape)  uncomment when outputinput is different
         self._status_bar.clear()
         self._status_bar.add_msgs([k['txt'] for k in self._hotkeys], "Help", duration_sec=0)
 
@@ -120,6 +119,7 @@ class KScopyApp(object):
 
     def _toggle_osd(self):
         self._OSD_on = not self._OSD_on
+        logging.info("Toggling OSD:  now %s" % (self._OSD_on,))
 
     def _shutdown(self):
         self._state = KScopeState.shutdown
@@ -170,7 +170,7 @@ class KScopyApp(object):
             out_frame = self._mirrors.get_masked_image(in_frame)
             self._status_bar.annotate_img(out_frame)
 
-        elif self._state == KScopeState.running:
+        elif self._state in (KScopeState.running, KScopeState.ray_tracing):
             out_frame = self._render(in_frame)
             # self._update_osd_info()
             if self._OSD_on:
@@ -193,8 +193,9 @@ class KScopyApp(object):
             logging.info("Hotkey shutdown starting...")
             self._shutdown()  # catch-all
 
-        if self._state == KScopeState.running:
+        if self._state in[ KScopeState.running, KScopeState.ray_tracing]:
             for key in self._hotkeys:
+
                 if ord(key['key']) == k & 0xff:
                     key['func']()
 
