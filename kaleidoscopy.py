@@ -187,15 +187,14 @@ class KScopyApp(object):
         self._out_frame_time = time.time()
         cv2.imshow(self._window_name, self._out_frame)
         k = cv2.waitKey(1)
-
         # KEYBOARD
+        
         if ord('q') == k & 0xff:
             logging.info("Hotkey shutdown starting...")
             self._shutdown()  # catch-all
 
         if self._state in[ KScopeState.running, KScopeState.ray_tracing]:
             for key in self._hotkeys:
-
                 if ord(key['key']) == k & 0xff:
                     key['func']()
 

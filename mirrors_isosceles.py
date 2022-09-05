@@ -16,7 +16,7 @@ class IsoscelesPrism(MirrorPrism):
         super(IsoscelesPrism, self).__init__()
 
     SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS + \
-                           [' Left-click + Drag up-and-down: adjust angle"']
+                           ['  left-click + drag up/down:  +/- angle']
 
     def get_unscaled_shape(self, **kwargs):
         """

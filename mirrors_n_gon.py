@@ -18,11 +18,11 @@ class NGonPrism(MirrorPrism):
 
     @classmethod
     def get_name(cls):
-        return " n-polygon "
+        return " n-gon "
 
     SHAPING_INSTRUCTIONS = MirrorPrism.SHAPING_INSTRUCTIONS + \
-        [' Left-click + Drag up-and-down:  adjust N',
-         ' Left-click + Drag left-and-right:  adjust angle', ]
+        ['  left-click + drag up/down:  +/- N',
+         '  left-click + drag left/right:  +/- angle', ]
 
     def get_unscaled_shape(self, **kwargs):
         """

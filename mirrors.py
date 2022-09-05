@@ -73,7 +73,7 @@ class MirrorPrism(ABC):
     """
 
     SHAPING_INSTRUCTIONS = ["Shape Mirror Geometry:  Hit SPACE-key when done...",
-                            " SHIFT + Left-click + Drag up-and-down:  aperture"]
+                            "  shift + left-click + drag up/down:  +/- aperture"]
 
     def __init__(self):
         if not hasattr(self, '_n'):
