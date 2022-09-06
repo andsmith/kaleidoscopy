@@ -118,17 +118,19 @@ class MirrorPrism(ABC):
             raise Exception
         return self._n
 
-    def get_planes(self, include_ground=True):
+    def get_planes(self):
         """
-        Get Plane() objects for each mirror
+        Get Plane() objects for each mirror, from it's 2-d corner/vertex representation.
+        (setting z-coord of intersection point to zero)
         """
-        points = self.get_scaled_shape()
-        points = np.vstack([points, points[-1, :]])
-
         if np.isinf(self._n):
             raise Exception("Don't get 3d surfaces of a curved mirror.")
 
-        mids, norms = [], []
+        points = self.get_scaled_shape()
+        points = np.hstack([points, np.zeros(self._n).reshape(-1,1)])  # add z to make 3D
+        points = np.vstack([points, points[0, :]])
+
+        planes= []
         for ind in range(self._n):
             midpoint = (points[ind, :] + points[ind + 1, :]) / 2.0
             forward_delta = points[ind+1,:] - midpoint
@@ -137,10 +139,8 @@ class MirrorPrism(ABC):
             if np.abs(perp[2])>1e-8:
                 raise Exception("Mirror surface normal should not have z-component.")
             perp /= np.linalg.norm(perp)
-
-            mids.append(midpoint)
-            norms.append(perp)
-        return np.array(mids), np.array(norms)
+            planes.append(Plane(midpoint, perp))
+        return planes
 
 
 

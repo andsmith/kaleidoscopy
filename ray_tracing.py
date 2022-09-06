@@ -85,14 +85,15 @@ class ScopeTracer(object):
         if n_active == 0:
             return True
 
-        result = _bounce(self._mirrors, self._ray_origins[active, :], self._ray_distances[active, :])
+        result = _bounce(self._mirrors, self._ray_origins[active, :], self._ray_directions[active, :])
 
-        target_hit_inds = active[result['hit_mask']]
-        remaining_active_inds = active[np.logical_not(result['hit_mask'])]
+        # START WORK HERE:  need to figure out active/subset hit mask indices, etc.
+        target_hit_inds = active[result['ground_hit_mask']]
+        remaining_active_inds = active[np.logical_not(result['ground_hit_mask'])]
 
-        self._hit_xyz[target_hit_inds, :] = result['target_hits_xyz']
+        self._hit_xyz[target_hit_inds, :] = result['hit_xyz_locations']
         self._ray_origins[remaining_active_inds] = result['new_ray_origins']
-        self._ray_directions[remaining_active_inds] = result['new_ray_dirctions']
+        self._ray_directions[remaining_active_inds] = result['new_ray_directions']
 
         self._active[target_hit_inds] = False
         logging.info("\tRay-tracing iteration %i ending with %i / %i rays active (%.3f %%)",
@@ -186,11 +187,11 @@ def _intersect_all_surfaces_all_rays(surfaces, ray_origins, ray_directions):
     :returns: S x N distances, all rays to all surfaces,
              List of S x N x 3 , all ray intersections for each surface
     """
-    intersections_distances = [surf.get_ray_intersections(ray_origins, ray_directions, no_points=True)[1]
-                               for surf in surfaces]
+    intersect_list = [surf.get_ray_intersections(ray_origins, ray_directions)
+                      for surf in surfaces]
 
-    intersections = np.stack([inter_dist[0] for inter_dist in intersections_distances])
-    distances = np.stack([inter_dist[1] for inter_dist in intersections_distances])
+    intersections = np.stack([inter_dist[0] for inter_dist in intersect_list])
+    distances = np.hstack([inter_dist[1] for inter_dist in intersect_list])
     return intersections, distances
 
 
@@ -202,41 +203,54 @@ def _bounce(mirrors, origins, directions):
         'ray_directions':  N x 3 (x,y,z)  unit
         'mirrors':  MirrorPrism object
     """
+    import ipdb;
+    ipdb.set_trace()
+
     # mirrors = info['mirrors']
     # origins, directions = info['origins'], info['directions']
     surfs = mirrors.get_planes()
+    n = mirrors.get_n()
     surfs.append(Plane.make_z_zero_plane())  # ground at the end
 
     # pairwise distance of all rays to all surfaces
     intersections, distances = _intersect_all_surfaces_all_rays(surfs, origins, directions)
-    valid = distances >= 0
+
+    valid = distances > 0  # by convention, not >=
+
     distances[np.logical_not(valid)] = np.Inf
-    all_invalid = np.sum(np.isInf(distances), axis=0).reshape(-1)
+    all_invalid = np.sum(np.isinf(distances), axis=1).reshape(-1) >= n
     if np.sum(all_invalid) > 0:
         raise Exception("This many rays hit nothing:  %s (all rays should hit something!)" % (np.sum(all_invalid),))
 
-    # what hit what?
-    hit_inds = np.argmin(distances, axis=0)
+    # what rays hit each surface
+    hit_inds = np.argmin(distances, axis=1)
     hit_lists = [np.where(hit_inds == i)[0] for i in range(mirrors.get_n() + 1)]
-    targ_hits = hit_lists[-1]
+
 
     result = {'new_ray_origins': origins * np.NaN,  # should all be non-nan (for rays not hitting ground) by the end
               'new_ray_directions': directions * np.NaN}
 
     for s_ind, surf in enumerate(surfs):
-        hitting_subset = targ_hits == s_ind
+        hitting_subset = hit_inds == s_ind
+
+        n_hit = np.sum(hitting_subset)
 
         if s_ind == len(surfs) - 1:
+            logging.info("  %i rays hit the ground." % (np.sum(hitting_subset),))
             # rays hitting target get saved
-            result['ground_hit_xyz_locations'] = intersections[hitting_subset, :]
-            result['ground_hit_subset'] = np.where(hitting_subset)
+            result['ground_hit_xyz_locations'] = intersections[s_ind,hitting_subset, :]
+            result['ground_hit_mask'] = hitting_subset
         else:
+
+            logging.info("  %i rays hit mirror %i." % (n_hit, s_ind))
+            if n_hit == 0:
+                continue
             # rays hitting mirror get reflected
-            result['new_ray_origins'][hitting_subset, :] = intersections[hitting_subset, :]
+            result['new_ray_origins'][hitting_subset, :] = intersections[s_ind,hitting_subset, :]
             result['new_ray_directions'][hitting_subset, :] = surf.get_ray_reflections(origins[hitting_subset, :],
                                                                                        directions[hitting_subset, :], )
 
-
+    return result
 '''
 
 class RayBundle(object):

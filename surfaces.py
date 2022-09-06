@@ -48,11 +48,18 @@ class Plane(Surface):
                      np.array((0., 0., 1.)))
 
     def get_ray_intersections(self, origins, unit_directions):
+        """
+        Intersect given rays with self.
+        :param origins:  N x 3 (xyz) coords of ray origin points
+        :param unit_directions:  Nx3 (x,y,z), direction of each ray
+        :returns:  Nx3 intersection points, and N-array of intersection distances (possibly negative).
+
+        """
         with np.errstate(divide='ignore', invalid='ignore'):
             # parallel rays go to np.inf, pointing away are negative
             dists = np.dot(self._xyz - origins, self._normal) / np.dot(unit_directions, self._normal)
-        dists = dists.reshape(-1, 1)
-        points = origins + dists * unit_directions
+        dists = dists.reshape(-1,1)
+        points = origins + unit_directions * np.tile(dists, (1, 3))
         return points, dists
 
     def get_ray_reflections(self, origins, unit_directions):
