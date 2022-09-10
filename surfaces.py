@@ -39,6 +39,10 @@ class Plane(Surface):
         self._xyz = np.array(xyz_intersect).reshape(-1)
         self._normal = (normal / np.linalg.norm(normal)).reshape(-1)
 
+    def get_params(self):
+        """The paramterization"""
+        return self._xyz, self._normal
+
     @staticmethod
     def make_z_zero_plane():
         """

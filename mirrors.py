@@ -88,6 +88,14 @@ class MirrorPrism(ABC):
         self._mask = None  # mask to keep only portion of image inside mirrors, for video during shaping
         self._mouse_state_mgr = MouseKeyboardState()  # for listening to shift (etc.) keys
 
+    @staticmethod
+    def is_planar():
+        """
+        Mirrors are planar?
+        (override for non-planar mirrors)
+        """
+        return True
+
     @abstractmethod
     def get_unscaled_shape(self, **kwargs):
         """
@@ -118,9 +126,9 @@ class MirrorPrism(ABC):
             raise Exception
         return self._n
 
-    def get_planes(self):
+    def get_surfaces(self):
         """
-        Get Plane() objects for each mirror, from it's 2-d corner/vertex representation.
+        Get Surface() objects for each mirror, from it's 2-d corner/vertex representation.
         (setting z-coord of intersection point to zero)
         """
         if np.isinf(self._n):
@@ -283,11 +291,11 @@ class MirrorPrism(ABC):
         NOTE:  Corners are shifted so inscribed circle center has x,y=0,0, if inscribed_radius is None.
 
         Init with list of 2d coordinates (i.e. closed polygon loop), representing view from the top.
-        :param corners:  Nx2 array, or N-element list of (x, y) pairs, clockwise oriened corners of a N-sided polygon.
+        :param corners:  Nx2 array, or N-element list of (x, y) pairs, clockwise oriented corners of a N-sided polygon.
         :param height: height of prism sides
         :param inscribed_circle:  ((x, y), r):  must fit inside corners, (not checked),
-            calculated if None, breaks for nonconvex
-
+            calculated if None, breaks for non-convex1!
+            
         """
         self._height = height
         bottom = height

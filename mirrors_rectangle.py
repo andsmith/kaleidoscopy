@@ -17,11 +17,6 @@ class RectangularPrism(MirrorPrism):
     def get_name(cls):
         return " rectangle "
 
-    def get_surfaces(self):
-        """
-        Get Surface() objects (corresponding to all mirrors) from current params
-        """
-
     def get_unscaled_shape(self, **kwargs):
         """
         Get coordinates of vertices of current shape,  fit into the unit square.

@@ -64,11 +64,6 @@ class NGonPrism(MirrorPrism):
         else:
             self._button_first_pressed_pos = None
 
-    def get_surfaces(self):
-        """
-        Get Surface() objects (corresponding to all mirrors) from current params
-        """
-
     @classmethod
     def get_icon_vertices(cls):
 

@@ -9,11 +9,11 @@ N_SAMPLES = 1000  # for drawing mask during shaping
 
 class CirclePrism(MirrorPrism):
     def get_unscaled_shape(self, **kwargs):
-        r = 0.5
+        self._r = 0.5  # constant, redundant w/aperture scale
         center = np.array((0.5, 0.5)).reshape(1, 2)
         t = np.linspace(0.0, np.pi * 2.0, N_SAMPLES)
-        points = np.stack([np.cos(t) * r,
-                           np.sin(t) * r], axis=1) + center
+        points = np.stack([np.cos(t) * self._r,
+                           np.sin(t) * self._r], axis=1) + center
         print(points.shape)
 
         return points
@@ -33,7 +33,15 @@ class CirclePrism(MirrorPrism):
         """
         Get Surface() objects (corresponding to all mirrors) from current params
         """
-        return [Cylinder(np.array([0.0, 0.0]), self.get_radius())]
+        return [Cylinder(np.array([0.0, 0.0]), self._r * self._aperture_scale)]
+
+    @staticmethod
+    def is_planar():
+        """
+        Mirrors are planar?
+        (override for non-planar mirrors)
+        """
+        return False
 
     @classmethod
     def get_name(cls):
