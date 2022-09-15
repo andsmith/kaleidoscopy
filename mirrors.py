@@ -342,23 +342,6 @@ class MirrorPrism(ABC):
         """
         return self._centers, self._normals
 
-    def plot_3d(self, ax=None, z_offset=0.0, color=(0.1, .15, 1.0, .5), **kwargs):
-        if ax is None:
-            fig = plt.figure()
-            ax = fig.add_subplot(111, projection='3d')
-
-        offset_vector = np.array([0, 0, z_offset])
-
-        top_right = self._top_right + offset_vector
-        top_left = self._top_left + offset_vector
-
-        bottom_right = self._bottom_right + offset_vector
-        bottom_left = self._bottom_left + offset_vector
-        all_corners = np.hstack([top_right, top_left, bottom_left, bottom_right])
-
-        handles = plot_3d_polygon(all_corners, ax, color=color, **kwargs)
-        return handles, ax
-
     def get_n(self):
         return self._n
     '''
@@ -475,19 +458,6 @@ def max_inscribed_circle(corners):
     return pos, r
 
 
-
-def plot_3d_polygon(corners, ax, color=(0.1, .15, 1.0, .5), **kwargs):
-    handles = []
-    for i in range(corners.shape[0]):
-        x = corners[i, ::3]
-        y = corners[i, 1::3]
-        z = corners[i, 2::3]
-        verts = [list(zip(x, y, z))]  # list necessary python 2/3?
-
-        poly = Poly3DCollection(verts)
-        poly.set_color(color)
-        handles.append(ax.add_collection3d(poly))
-    return handles
 
 '''
 if __name__ == "__main__":
