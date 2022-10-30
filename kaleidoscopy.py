@@ -59,9 +59,10 @@ class KScopyApp(object):
 
         # User chooses type of scope
         self._mirror_type = self._user_pick_shape()
-        self._mirrors = self._mirror_type()
         self._cam.start()
         self._input_shape = self._cam.get_resolution(wait=True)[::-1]
+        self._mirrors = self._mirror_type(self._input_shape)
+
         self._status_bar = StatusMessages(self._input_shape, LAYOUT['osd']['text_color'],
                                           # starts with resolution of camera
                                           LAYOUT['osd']['bkg_color'],
@@ -74,8 +75,9 @@ class KScopyApp(object):
 
         # clear callback
         cv2.setMouseCallback(self._window_name, lambda *args: None)
-        self._ray_tracer =  ScopeTracer(mirrors=self._mirrors,
-                                      output_shape=self._output_shape,  # "output" = produced image/mapping
+        self._ray_tracer = ScopeTracer(mirrors=self._mirrors,
+                                       input_shape=self._input_shape,
+                                       output_shape=self._output_shape,  # "output" = produced image/mapping
                                        update_callback=self._update_k_map)  #
 
         # Start raytracing and rendering
@@ -83,16 +85,11 @@ class KScopyApp(object):
         self._state = KScopeState.ray_tracing
 
         # setup main OSD (params may differ from OSD during mirror shaping)
-        ###self._status_bar.set_image_shape(self._output_shape)  uncomment when outputinput is different
         self._status_bar.clear()
         self._status_bar.add_msgs([k['txt'] for k in self._hotkeys], "Help", duration_sec=0)
 
         # begin
-        # self._ray_tracer.start()
-
-        # except ShutdownException:
-        #    print("App Shutdown - by exception!")
-        #    pass
+        self._ray_tracer.run()
 
     @staticmethod
     def _user_pick_shape():
@@ -129,11 +126,11 @@ class KScopyApp(object):
             self._ray_tracer.shutdown()
         print("Main._shutdown() done.")
 
-    def _update_k_map(self, img_map, stats):
+    def _update_k_map(self, img_map):
         """
         Callback for renderer, to update the kaleidoscope mapping as it is created
         """
-        self._k_map = img_map
+        self._renderer.update_mapping(img_map)
 
     def _wait(self):
         """
@@ -188,12 +185,12 @@ class KScopyApp(object):
         cv2.imshow(self._window_name, self._out_frame)
         k = cv2.waitKey(1)
         # KEYBOARD
-        
+
         if ord('q') == k & 0xff:
             logging.info("Hotkey shutdown starting...")
             self._shutdown()  # catch-all
 
-        if self._state in[ KScopeState.running, KScopeState.ray_tracing]:
+        if self._state in [KScopeState.running, KScopeState.ray_tracing]:
             for key in self._hotkeys:
                 if ord(key['key']) == k & 0xff:
                     key['func']()

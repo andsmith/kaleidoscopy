@@ -1,6 +1,6 @@
 """
 Trace rays of light from the eye through the scope to the target plane.
-Runs in parallel on N cores.  Anti-aliasing optional.
+Runs in parallel on N cores.
 """
 
 import time
@@ -22,41 +22,75 @@ class ScopeTracer(object):
 
     def __init__(self,
                  mirrors,
+                 input_shape,
                  output_shape,
                  update_callback,
                  n_cores=0):
         """
 
         :param mirrors:  Mirrors() object, set of mirrors
+        :param input_shape:  H x W of what kaleidoscope is looking at (image or video frames)
         :param output_shape:  H x W of output image
-            Note, this defines the image plane.  The "world" coordinates have a unit square that just fits inside,
-            i.e. maps to the number of pixels in the shorter axis (vertical)
-        :param update_callback:  function(new_map, stats) to call when results update
-            new_map is dict{'mapping': HxW array, int64 of (single-index) locations of sources for each pixel,
-                            'bounce_counts':  (same type) how many mirrors each ray hit
-                            'distances':  (same dims, but float) how far each ray travelled}
-        :param n_cores: how many cores to use during distance calculations (1 = single process, 0 = n_cores - 1)
+        :param update_callback:  function(new_map) to call when results update
+        :param n_cores: how many cores to use during distance calculations (1: single process, 0: n_cores - 1)
         """
         self._mirrors = mirrors
-        self._n_cores = 1  ####n_cores if n_cores != 0 else cpu_count() - 1
-        logging.info("ScopeTracer() created running with %i cores." % (self._n_cores,))
+        self._n_cores = n_cores if n_cores > 0 else cpu_count() - 1  # save one for renderer
+
         self._pool = Pool(processes=self._n_cores) if self._n_cores > 1 else None
         self._callback = update_callback
         self._pipe = Pipe(duplex=True)
 
-        self._img_shape = output_shape
+        self._input_shape = input_shape
+        self._output_shape = output_shape
 
         # self._update_result_lock = Lock()
         self._shutdown = False
 
-        # Ray-tracing things
-        self._bounce_index = 0
-        self._ray_origins, self._ray_directions = make_unit_rays(self._img_shape, )
+        self._bounce_index = 0  # aka, iteration count
+        self._mapping = None  # flattened array mapping output pixel locations to input pixel locations (lookup)
+        self._setup_rays()
+
+        logging.info("ScopeTracer() created running with %i cores." % (self._n_cores,))
+
+    def _setup_rays(self):
+
+        # eye / focus
+        self._z_dist = 1.0
+        self._origin = np.array([0.0, 0.0, self._z_dist])
+        self._fov = np.deg2rad(30.0)
+
+        # target/image (thing rays hit) dimensions
+        self._input_width = np.tan(self._fov) * self._origin * 2
+        dpi = self._input_shape[1] / self._input_width
+        self._input_height = self._input_shape[0] / dpi
+        self._input_zoom = 1.0
+        self._input_pan_xy = np.array([0.0, 0.0])
+
+        # for calculating xy -> pixel index
+        self._pixel_size = 1.0 / dpi
+        self._x_min = -self._input_width / 2. - self._pixel_size / 2.0  # half pixel offset
+        self._y_min = -self._input_height / 2. - self._pixel_size / 2.0
+
+        # output dimensions (where rays would hit target if mirrors weren't there)
+        # match width of input dimensions, set height to keep aspect ratio
+        output_dpi = self._output_shape[1] / self._input_width
+        output_height = self._output_shape[0] / output_dpi
+
+        logging.info("Target area dimensions:  W:  %.2f,  H:  %.2f" % (self._input_width, self._input_height))
+
+        # ray vectors
+        ray_extent = {'z': self._z_dist,
+                      'x': self._input_width,
+                      'y': output_height}
+        self._ray_origins, self._ray_directions = make_unit_rays(self._output_shape, ray_extent)
+
+        # flatten, for dividing up for multiprocessing
         self._ray_origins = self._ray_origins.reshape((-1, 3))
         self._ray_directions = self._ray_directions.reshape((-1, 3))
-        self._n_rays = np.prod(self._img_shape)
+        self._n_rays = np.prod(self._output_shape)
 
-        # results
+        # results go in these
         self._active = np.tile(True, self._n_rays)  # Rays still bouncing
         self._bounce_counts = np.zeros(self._n_rays, dtype=np.int64)  # how many bounces for each ray until it hit
         self._ray_distances = np.zeros(self._n_rays,
@@ -71,12 +105,9 @@ class ScopeTracer(object):
             if self._iterate():
                 logging.info("Ray-tracing iterate() returned no active rays.")
                 break
-            self._callback(self.get_current_result())
-        logging.info("Ray-tracer main mapping completed in %i iterations." % (self._bounce_index,))
+            logging.info("Iteration %i complete, mapping updated." % (self._bounce_index,))
 
-        # ## implement anti-aliasing here
-        # Find pixels on borders of contiguous regions.
-        # Send AA rays through those pixels
+        logging.info("Ray-tracer main mapping completed in %i iterations." % (self._bounce_index,))
 
     def _iterate(self):
 
@@ -101,6 +132,27 @@ class ScopeTracer(object):
                      np.sum(self._active), self._active.size,
                      100 * np.mean(self._active))
 
+        self._mapping = self._get_mapping()
+        self._callback(self._mapping)
+
+    def _get_mapping(self):
+        """
+        Figure out which pixels are under the hit_xyz locations
+        Each pixel is a square around it's coordinate.
+        :returns: array of indices: M[a] = b means the output pixel at location a should be the
+            value of the input pixel at location b (using flattened, 1-dim coords)
+        """
+        x_max, y_max = -self._x_min, - self._y_min
+        valid = (self._hit_xyz[:, 2] > -1.0) \
+                & (self._hit_xyz[:, 0] > self._x_min) & (self._hit_xyz[:, 0] < x_max) \
+                & (self._hit_xyz[:, 1] > self._y_min) & (self._hit_xyz[:, 1] < y_max)
+        j_values = np.int64((self._hit_xyz[valid, 0] - self._x_min) / self._pixel_size)
+        i_values = np.int64((self._hit_xyz[valid, 1] - self._y_min) / self._pixel_size)
+        mapping = np.zeros(self._n_rays, np.int64) - 1
+        mapping[valid] = i_values * self._output_shape[1] + j_values
+        return mapping
+
+    '''
     def _iterate_multiprocessing(self):
         """
         Do a ray-tracing iteration, i.e. advance rays to next surface:  Divide work into multiprocessing units &
@@ -133,18 +185,13 @@ class ScopeTracer(object):
             self._ray_directions[(part,), :] = result['directions']
             self._hit_xyz[(hit_subset_indices,), :] = result['hit_xyz_locations']
             self._bounce_counts[(hit_subset_indices,), :] = self._bounce_index
+    '''
 
     def shutdown(self):
         self._shutdown = True
 
-    def get_current_result(self):
-        return {'mapping': self._hit_xy.copy(),
-                'bounce_counts': self._bounce_counts.copy(),
-                'distances': self._ray_distances.copy(),
-                }
 
-
-def make_unit_rays(shape, origin=(0.5, 0.5, 5.0)):
+def make_unit_rays(shape, extent):
     """
     Make rays from the origin to the z=0 plane.
         The rays spread so that they just cover a unit square, given the aspect ratio (with padding on the sides,
@@ -153,25 +200,21 @@ def make_unit_rays(shape, origin=(0.5, 0.5, 5.0)):
     (The value of z is unimportant, since the FOV angle scales opposite Z so the image always fits)
 
     :param shape:  height, width of grid of rays
-    :param origin:  x, y, z  (no guarantees if z nonpositive)
+    :param extent:  dict describing spread of rays:
+        'z':  distance to origin
+        'x': horizontal spread
+        'y': vertical spread
     :returns: h x w x 3 array of ray origins (all equal to the input origin)
               h x w x 3 array of ray directions (unit).
     """
+    # ray start coordinates
+    origins = np.tile(np.array([0.0, 0.0, extent['z']]), (shape[0], shape[1], 1))
+    x_span = np.linspace(-extent['x'] / 2., extent['x'] / 2., shape[1])
+    y_span = np.linspace(-extent['y'] / 2., extent['y'] / 2., shape[1])
 
-    origins = np.tile(np.array(origin), (shape[0], shape[1], 1))
-    if shape[0] > shape[1]:
-        # output image is portrait aspect
-        y_pad = (float(shape[0]) / float(shape[1]) - 1) / 2.
-        x_span = np.linspace(-.5, .5, shape[1])
-        y_span = np.linspace(-.5 - y_pad, .5 + y_pad, shape[0])
-    else:
-        # landscape aspect
-        x_pad = (float(shape[1]) / float(shape[0]) - 1) / 2.
-        x_span = np.linspace(-.5 - x_pad, .5 + x_pad, shape[1])
-        y_span = np.linspace(-.5, .5, shape[0])
-
+    # ray endpoint coordinates
     x, y = np.meshgrid(x_span, y_span)
-    z = x * 0.0 - 2.0  # z only really matters for a side-view visualization
+    z = x * 0.0 - extent['z']
     directions = np.dstack([x, y, z])
     magnitudes = np.linalg.norm(directions, axis=2, keepdims=True)
     unit_directions = directions / magnitudes
@@ -226,7 +269,6 @@ def _bounce(mirrors, origins, directions):
     hit_inds = np.argmin(distances, axis=1)
     hit_lists = [np.where(hit_inds == i)[0] for i in range(mirrors.get_n() + 1)]
 
-
     result = {'new_ray_origins': origins * np.NaN,  # should all be non-nan (for rays not hitting ground) by the end
               'new_ray_directions': directions * np.NaN}
 
@@ -238,7 +280,7 @@ def _bounce(mirrors, origins, directions):
         if s_ind == len(surfs) - 1:
             logging.info("  %i rays hit the ground." % (np.sum(hitting_subset),))
             # rays hitting target get saved
-            result['ground_hit_xyz_locations'] = intersections[s_ind,hitting_subset, :]
+            result['ground_hit_xyz_locations'] = intersections[s_ind, hitting_subset, :]
             result['ground_hit_mask'] = hitting_subset
         else:
 
@@ -246,11 +288,13 @@ def _bounce(mirrors, origins, directions):
             if n_hit == 0:
                 continue
             # rays hitting mirror get reflected
-            result['new_ray_origins'][hitting_subset, :] = intersections[s_ind,hitting_subset, :]
+            result['new_ray_origins'][hitting_subset, :] = intersections[s_ind, hitting_subset, :]
             result['new_ray_directions'][hitting_subset, :] = surf.get_ray_reflections(origins[hitting_subset, :],
                                                                                        directions[hitting_subset, :], )
 
     return result
+
+
 '''
 
 class RayBundle(object):

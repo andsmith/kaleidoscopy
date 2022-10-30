@@ -69,18 +69,28 @@ def _get_normals_from_points(c1, c2, c3):
 
 class MirrorPrism(ABC):
     """
-    Abstract class to handle geometry.
+    Abstract class to handle geometry of mirrors.
     """
 
     SHAPING_INSTRUCTIONS = ["Shape Mirror Geometry:  Hit SPACE-key when done...",
                             "  shift + left-click + drag up/down:  +/- aperture"]
 
-    def __init__(self):
+    def __init__(self, target_shape):
+        """
+        :param target_shape:  Shape of image mirrors are over
+        """
         if not hasattr(self, '_n'):
             raise Exception("MirrorPrism subclasses should set self._n before calling super().__init__()")
 
-        self._aperture_scale = 1.0  # largest to start
-        self._old_aperture_scale = None  # hold value while user adjusts
+        # Assume width is FOV degrees, calculate image height
+        width = np.tan(np.deg2rad(LAYOUT['geometry']['input_fov'])) * LAYOUT['geometry']['z_dist']
+        dpi = target_shape[1] / width
+        self._max_size = np.min(target_shape) / dpi  # smaller dimension limits mirror size
+
+        self._surfaces= []
+
+        self._scale = 1.0  # largest to start
+        self._old_scale = None  # hold value while user adjusts
         self._shaping_finish_event = None
         self._shaping_window_name = None
         self._mouse_state = None
@@ -96,30 +106,6 @@ class MirrorPrism(ABC):
         """
         return True
 
-    @abstractmethod
-    def get_unscaled_shape(self, **kwargs):
-        """
-        Get "raw" 2d vertices of mirror corners, unscaled by aperture size, just defined by shape customization params.
-        (i.e. should be largest, at scale 1.0, and inscribed in unit square)
-
-        """
-        pass
-
-    def get_aperture_scale(self):
-        return self._aperture_scale
-
-    def get_scaled_shape(self):
-        """
-        Get shape of mirrors as they will appear in the window, that is, given aperture scale and custom params.
-        """
-        unscaled = self.get_unscaled_shape()
-        center = np.array((0.5, 0.5)).reshape(1, 2)  # everything shrinks towards this
-
-        # focus & image left & right corners form 2 right triangles w/ right angles at midpoint on image.
-        # when aperture is maximum, unit square fills window.
-        scaled = (unscaled - center) * self._aperture_scale + center
-        return scaled
-
     def get_n(self):
         """Number of mirrors"""
         if self._n is None:
@@ -131,26 +117,27 @@ class MirrorPrism(ABC):
         Get Surface() objects for each mirror, from it's 2-d corner/vertex representation.
         (setting z-coord of intersection point to zero)
         """
+        return self._surfaces
+
+        
         if np.isinf(self._n):
             raise Exception("Don't get 3d surfaces of a curved mirror.")
 
         points = self.get_scaled_shape()
-        points = np.hstack([points, np.zeros(self._n).reshape(-1,1)])  # add z to make 3D
+        points = np.hstack([points, np.zeros(self._n).reshape(-1, 1)])  # add z to make 3D
         points = np.vstack([points, points[0, :]])
 
-        planes= []
+        planes = []
         for ind in range(self._n):
             midpoint = (points[ind, :] + points[ind + 1, :]) / 2.0
-            forward_delta = points[ind+1,:] - midpoint
+            forward_delta = points[ind + 1, :] - midpoint
             upward_delta = np.array([0.0, 0.0, 1.0])
             perp = np.cross(forward_delta, upward_delta)
-            if np.abs(perp[2])>1e-8:
+            if np.abs(perp[2]) > 1e-8:
                 raise Exception("Mirror surface normal should not have z-component.")
             perp /= np.linalg.norm(perp)
             planes.append(Plane(midpoint, perp))
         return planes
-
-
 
     '''
     def get_surfaces(self):

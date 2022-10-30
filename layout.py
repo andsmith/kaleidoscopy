@@ -1,6 +1,8 @@
 import numpy as np
 
-LAYOUT = {'icons': {'size': 200,
+LAYOUT = {'geometry': {'input_fov_deg': 40.0,
+                       'z_dist': 1.0},
+          'icons': {'size': 200,
                     'colors': {'background': (254, 250, 245),
                                'foreground': (10, 10, 15)},
                     'fig_top_y': .1,  # draw up to here
