@@ -1,3 +1,6 @@
 [submodule "gui_utils"]
 	path = gui_utils
 	url = git@github.com:andsmith/gui_utils
+[submodule "pygame_app"]
+	path = pygame_app
+	url = git@github.com:andsmith/pygame_app
