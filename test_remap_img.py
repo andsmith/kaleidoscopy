@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from remap_img import remap
 import cv2
+import logging
+#from loop_timing.loop_profiler import LoopPerfTimer as LPT
 
 def make_square_remap(w, h, n_squares=20, square_size=30):
     def _rand_square():
@@ -28,7 +30,7 @@ class RemapImgApp(PygameVideoIOApp):
     Select N random squares and move them to different parts of the image.
     Test using pygame.
     """
-    def __init__(self, size=(640, 480)):
+    def __init__(self, size=(1920, 1080)):
         vid_out_props = {'size': size, 'fps': 30}
         vid_in_props = {'size': size, 'ind': 0, 'mirror': True}
         self._f_no =0
@@ -42,6 +44,9 @@ class RemapImgApp(PygameVideoIOApp):
         self._blank = np.zeros((size[1], size[0], 3), dtype=np.uint8)
         self._frame_out = self._blank.copy()
 
+        #LPT.reset(enable=True, burn_in = 30, display_after=30)
+
+    #@LPT.time_function    
     def camera_update(self, new_frame, dt):
         image = np.ascontiguousarray(self.surface_to_array(new_frame))
         frame_out = self._blank.copy()
@@ -49,10 +54,17 @@ class RemapImgApp(PygameVideoIOApp):
         self._frame_out = frame_out
         self._f_no +=1
 
+    #@LPT.time_function    
     def app_update(self, dt):
         new_frame = self.array_to_surface((self._frame_out))
         return new_frame
     
+    def _handle_events(self):
+        #LPT.mark_loop_start()
+        return super()._handle_events()
+    
+    
+#@LPT.time_function    
 def _remap(img_src, img_dest, map_x, map_y):
     """
     Rearange an image, pixel-by-pixel.
@@ -89,6 +101,9 @@ def test_frame():
 def test_live_2():
     # test with CV2
     cam = cv2.VideoCapture(0)
+    # set resolution to 1920x1080
+    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     map_x, map_y =None, None
 
     while True:
@@ -106,8 +121,9 @@ def test_live_2():
 
 
 if __name__ == '__main__':
-    #test_live_2()
-    _test_live()
+    logging.basicConfig(level=logging.INFO)
+    test_live_2()
+    #_test_live()
     #test_frame()
             
         
