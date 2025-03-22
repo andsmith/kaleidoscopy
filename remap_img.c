@@ -52,6 +52,8 @@
         for (int j = 0; j < cols_src; ++j) {
             int index = i * cols_src + j;
             int src_index = y_map_data[index] * cols_src + x_map_data[index];
+            if (src_index < 0 || src_index >= rows_src * cols_src) 
+                continue;
             for (int k = 0; k < chans_src; ++k) {
                 img_dest_data[index * chans_src + k] = img_src_data[src_index * chans_src + k];
             }

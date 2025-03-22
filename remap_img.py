@@ -1,10 +1,10 @@
 from distutils.core import setup, Extension
-import numpy
+import numpy as np
 
 remap_img_module = Extension(
     'remap_img',
     sources=['remap_img.c'],
-    include_dirs=[numpy.get_include()],
+    include_dirs=[np.get_include()],
         define_macros=[('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION')],
         extra_compile_args=['-O2'],
 )

@@ -1,6 +1,27 @@
 /*
  *
- * windows build:  cl /I C:\Python39\lib\site-packages\numpy\core\include /LD /DBUILD_MAPIMG_LIBRARY /I C:\Python39\include map_img.cpp /link /LIBPATH:C:\Python39\Libs\
+ * windows build: 
+ *
+ *     cl /I C:\Users\andre\AppData\Local\Programs\Python\Python312\Lib\site-packages\numpy\core\include /LD /DBUILD_MAPIMG_LIBRARY /I C:\Users\andre\AppData\Local\Programs\Python\Python312\include map_img.cpp /link /LIBPATH:C:\Users\andre\AppData\Local\Programs\Python\Python312\libs
+ *
+ *  General windows build:
+ *
+ *     cl /I [numpy-include-path] /LD /DBUILD_MAPIMG_LIBRARY /I [python-include-path] map_img.cpp /link /LIBPATH:[python-lib-path]
+ *
+ *
+ *     [numpy-include-path] find with: python -c "import numpy; print(numpy.get_include())"
+ *     [python-include-path] find with: python -c "import sysconfig; print(sysconfig.get_paths()['include'])"
+ *     [python-lib-path] find with: python -c "import sysconfig; print(sysconfig.get_paths()['stdlib'])"
+ *
+ *
+ * Linux build:
+ *
+ *     g++ -shared -fPIC -I /usr/lib/python3.8/site-packages/numpy/core/include -I /usr/include/python3.8 map_img.cpp -o map_img.so
+ *  
+ *  General Linux build:
+ *
+ *     g++ -shared -fPIC -I [numpy-include-path] -I [python-include-path] map_img.cpp -o map_img.so
+ * 
  */
 //
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
