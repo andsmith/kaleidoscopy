@@ -22,7 +22,6 @@ from threading import Thread, Lock
 import logging
 
 
-
 class Mirror(object):
     """
     planar, vertical mirror
@@ -31,25 +30,52 @@ class Mirror(object):
     def __init__(self, p0, p1):
         self.p0 = np.array(p0)
         self.p1 = np.array(p1)
+        self._init_geom()
+
+    def _init_geom(self):
+        # normal, for reflecting rays:
         p_vec = self.p1 - self.p0
         self.p_unit_2d = p_vec / np.linalg.norm(p_vec)
 
+        # Coefficients for calculating intersections with rays:
+        self._C = -(self.p0[1]-self.p1[1])*self.p0[0] - (self.p1[0]-self.p0[0])*self.p0[1]
+        self._Cx = self.p0[1] - self.p1[1]
+        self._Cy = self.p1[0] - self.p0[0]
+        
     def get_dist(self, origins, directions):
         """
         Calculate the intersection of the mirror with the rays.
+        Do not consider mirror endpoints (i.e. extend mirrors indefinitely).
+
+        Since Mirror objects are vertical planes, let the two points be:
+          P0 = (P0x, P0y, 0) and P1 = (P1x, P1y, 0)
+
+        Then the intersection distance with ray R  with position (Rx, Ry, Rz) and direction
+        unit vector U = (Ux, Uy, Uz) is given by:
+
+                Cx * Rx + Cy * Ry + C
+        d = - ---------------------------   (note the negative sign)
+                  Cx * Ux + Cy * Uy
+
+        for the constants nRx, nRy, dUx, dUy, and C calculated from the mirror points.
+
+
         :param origins: Nx3 array of ray origins
         :param directions: Nx3 array of ray directions (unit vectors)
         :returns: N element array of distances to the mirror (negative = no hit)
         """
-        # calculate the intersection of the ray with the mirror
-        import ipdb; ipdb.set_trace()
-        a = self.p0 - origins
-        b = np.sum(a * self.p_unit_2d, axis=1)
-        c = np.sum(directions * self.p_unit_2d, axis=1)
-        dists = -b / c
-        return dists
+        Rx = origins[:, 0]
+        Ry = origins[:, 1]
+        Rz = origins[:, 2]
+        Ux = directions[:, 0]
+        Uy = directions[:, 1]
+        Uz = directions[:, 2]
 
+        d = -(self._Cx * Rx + self._Cy * Ry + self._C) / (self._Cx * Ux + self._Cy * Uy)
+        # d[Uz == 0] = -1
 
+        return d
+    
     def reflect(self, u_vec):
         """
         Reflect unit vectors off the mirror.
@@ -68,19 +94,42 @@ class Mirror(object):
 
 
 def test_mirror_intersection():
-    mirror = Mirror([0, 0], [1, 0])
-    origins = np.array([[0, 0, 1], [0, 0, 1], [0, 0, 1]])
-    directions = np.array([[1, 0, 0], [0, 1, 0], [1, 1, 0]])
+    mirror = Mirror([2, 0], [0, 2])
+    mirror_angle = np.pi/4
+    origin = np.zeros(3)
+    directions = np.array([[1, 1, 0], [2, 1, 0], [1, 2, 0]],dtype=np.float64)
+    directions /= np.linalg.norm(directions, axis=-1, keepdims=True)
+    angles = np.arctan2(directions[:, 1], directions[:, 0])
+    upper_angles = np.pi - (angles + mirror_angle)  
+
+    true_dists = 2 * np.sin(mirror_angle)/np.sin(upper_angles)
+    print(true_dists)
+
+    origins = np.tile(origin, (directions.shape[0], 1))
     dists = mirror.get_dist(origins, directions)
+    print(dists)
+
+    fig, ax = plt.subplots()
+    ax.plot([mirror.p0[0], mirror.p1[0]], [mirror.p0[1], mirror.p1[1]], 'ko-', label='mirror')
+    ax.plot(origins[:, 0], origins[:, 1], 'ro', label='origins')
+    for d in range(len(directions)):
+        ax.plot([origins[d, 0], origins[d, 0] + directions[d, 0]],
+                [origins[d, 1], origins[d, 1] + directions[d, 1], ], 'b-', label='direction %i' % d)
+    ax.legend()
+    ax.axis('equal')
+    plt.show()
     assert np.allclose(dists, [0, -1, 0.5])
+
+
 def test_mirror_reflection():
     mirror = Mirror([0, 0], [1, 0])
     u_vec = np.array([[1, 0, 0], [0, 1, 0], [1, 1, 0]])
     ref = mirror.reflect(u_vec)
     assert np.allclose(ref, [[-1, 0, 0], [0, 1, 0], [-1, -1, 0]])
 
+
 class Raytracer(object):
-    def __init__(self,size, mirrors, targ_z, x_max, y_max, threaded=False):
+    def __init__(self, size, mirrors, targ_z, x_max, y_max, threaded=False):
         """
         :param mirrors: list of Mirror objects
         :param targ_z: z-coordinate of the target plane
@@ -151,15 +200,15 @@ class Raytracer(object):
             self._init_rays()
             self._map = np.meshgrid(np.arange(w_px), np.arange(h_px, dtype=np.int32))
             self._bounce_count = np.zeros((h_px, w_px), dtype=np.int32)
-            iter=0
-            
+            iter = 0
+
             while self._origins.size > 0:
                 bounce = _bounce(self._origins, self._directions, self._mirrors, self._targ_z)
 
                 logging.info("Iteration %i:  %i rays hit target, %i (%.3f %%) remain." % (
-                    iter, len(bounce['target_hit_inds']), len(bounce['mirror_hit_inds']), 
+                    iter, len(bounce['target_hit_inds']), len(bounce['mirror_hit_inds']),
                     len(bounce['mirror_hit_inds']) / len(self._origins) * 100))
-                
+
                 # where rays hit target
                 target_xy = bounce['new_origins'][bounce['target_hit_inds'], :2]
                 targ_ray_x, targ_ray_y = self._unscale_coords(target_xy[:, 0], target_xy[:, 1])
@@ -176,7 +225,7 @@ class Raytracer(object):
                 self._origins = bounce['new_origins'][bounce['mirror_hit_inds']]
                 self._directions = bounce['new_directions'][bounce['mirror_hit_inds']]
 
-                iter += 1  
+                iter += 1
 
             logging.info("Raytracing complete in %i iterations." % iter)
 
@@ -186,7 +235,6 @@ class Raytracer(object):
             self._thread.start()
         else:
             _trace()
-
 
 
 def _bounce(origins, directions, mirrors, targ_z):
@@ -203,7 +251,7 @@ def _bounce(origins, directions, mirrors, targ_z):
     """
     n = origins.shape[0]
     mirror_dists = np.concatenate([mirror.get_dist(origins, directions) for mirror in mirrors],
-                                     axis=0)
+                                  axis=0)
     target_dists = (targ_z - origins[:, 2]) / directions[:, 2]
     closest_mirror = np.argmin(mirror_dists)
     target_hits = np.where(target_dists < mirror_dists[closest_mirror])[0]
@@ -233,7 +281,6 @@ def _bounce(origins, directions, mirrors, targ_z):
             'new_origins': new_origins,
             'new_directions': new_directions}
 
-    
 
 def make_iso_mirrors(angle_deg=30., size=0.9):
     """
@@ -273,6 +320,6 @@ def test_iso_mirrors():
 if __name__ == "__main__":
     # test_iso_mirrors()
     logging.basicConfig(level=logging.INFO)
-    #test_mirror_intersection()
-    test_mirror_reflection()
+    test_mirror_intersection()
+    # test_mirror_reflection()
     logging.info("All tests passed.")
