@@ -72,8 +72,19 @@ class Mirror(object):
         Uy = directions[:, 1]
         Uz = directions[:, 2]
 
-        d = -(self._Cx * Rx + self._Cy * Ry + self._C) / (self._Cx * Ux + self._Cy * Uy)
-        # d[Uz == 0] = -1
+        num = -(self._Cx * Rx + self._Cy * Ry + self._C) 
+        denom = (self._Cx * Ux + self._Cy * Uy)
+
+        # if the denominator is zero, the ray is parallel to the mirror, set 
+        # the distance manually to Inf instead of dividing:
+        parallel = np.isclose(denom, 0)
+        hits = np.logical_not(parallel)
+        d = np.zeros_like(num)
+        d[parallel] = np.inf
+        d[hits] = num[hits] / denom[hits]
+
+        # also mask out negative distances (rays going away from the mirror)
+        d[d < 0] = np.inf
 
         return d
     
@@ -181,20 +192,41 @@ def make_iso_mirrors(angle_deg=30., size=0.9):
     mirrors = [Mirror(points[i], points[(i+1) % 3]) for i in range(3)]
     return mirrors
 
+def make_mirror_box(size=0.9):
+    points = np.array([[-1, -1], [1, -1], [1, 1], [-1, 1]]) * size
+    mirrors = [Mirror(points[i], points[(i+1) % 4]) for i in range(4)]
+    return mirrors
+
 
 def show_iso_mirrors():
     # plot the mirrors for a 15, 30, 45, 60, 90, and 120 degree triangle
     angles = [15, 30, 45, 60, 90, 120]
     n_plot = 1
-    for angle in angles:
+
+
+    def _plot_mirrors(ax, m_list, title):
+        for mirror in m_list:
+            ax.plot([mirror.p0[0], mirror.p1[0]], [mirror.p0[1], mirror.p1[1]], 'ko-')
+        ax.set_title(title)
+        ax.axis('equal')
+        ax.axis('off')
+
+    fig, ax = plt.subplots(2, 4)
+    fig.suptitle("Mirror configurations")
+    ax = ax.flatten()
+    for i, angle in enumerate(angles):
         mirrors = make_iso_mirrors(angle)
-        plt.subplot(2, 3, n_plot)
-        n_plot += 1
-        for mirror in mirrors:
-            plt.plot([mirror.p0[0], mirror.p1[0]], [mirror.p0[1], mirror.p1[1]], 'ko-')
-        plt.title("%d degrees" % angle)
-        plt.axis('equal')
-        plt.axis('off')
+        title="%d degrees" % angle
+        _plot_mirrors(ax[i], mirrors, title)
+    mbox1 = make_mirror_box(.9)
+    _plot_mirrors(ax[-1], mbox1, "Mirror box %.2f" % .9)
+    ax[-1].set_xlim(-1.0, 1.0)
+    ax[-1].set_ylim(-1.0, 1.0)
+    mbox2 = make_mirror_box(.4)
+    _plot_mirrors(ax[-2], mbox2, "Mirror box %.2f" % .4)
+    ax[-2].set_xlim(-1.0, 1.0)
+    ax[-2].set_ylim(-1.0, 1.0)
+    
     plt.tight_layout()
     #plt.show()
 

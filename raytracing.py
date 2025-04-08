@@ -12,7 +12,7 @@ Coordinate conventions:
     - mirrors are defined by two points, p0 and p1 in the XY plane, extend indfinitely in both z directions
     - The field of view is set so image would fill the target plane if there were no mirrors:
       - X-axis of the target (the screen) is normalized to [-1, 1], 
-      - Y-axis is normalized to [-1, 1] * aspect ratio
+      - Y-axis is normalized to [-1, 1] / aspect ratio
 
 """
 import numpy as np
@@ -93,7 +93,7 @@ class Raytracer(object):
             self._size = (w_px, h_px)
             self._init_rays()
             self._map = np.meshgrid(np.arange(w_px), np.arange(h_px, dtype=np.int32))
-            self._bounce_count = np.zeros((h_px, w_px), dtype=np.int32)
+            self._bounce_count = np.zeros((h_px, w_px), dtype=np.int32) - 1
             iter = 0
 
             while self._origins.size > 0:
@@ -115,7 +115,7 @@ class Raytracer(object):
                     self._map[0][map_y, map_x] = targ_ray_x
                     self._map[1][map_y, map_x] = targ_ray_y
                     self._bounce_count[map_y, map_x] = iter
-
+                print(self._bounce_count)
                 self._origins = bounce['new_origins'][bounce['mirror_hit_inds']]
                 self._directions = bounce['new_directions'][bounce['mirror_hit_inds']]
 
@@ -144,11 +144,13 @@ def _bounce(origins, directions, mirrors, targ_z):
                    'new_directions': Nx3 array of new ray directions}
     """
     n = origins.shape[0]
-    mirror_dists = np.concatenate([mirror.get_dist(origins, directions) for mirror in mirrors],
-                                  axis=0)
+    mirror_dists = np.stack([mirror.get_dist(origins, directions) for mirror in mirrors],
+                                  axis=1)
     target_dists = (targ_z - origins[:, 2]) / directions[:, 2]
-    closest_mirror = np.argmin(mirror_dists)
-    target_hits = np.where(target_dists < mirror_dists[closest_mirror])[0]
+    import ipdb; ipdb.set_trace()
+    closest_mirrors = np.argmin(mirror_dists, axis=1)
+    closest_m_dists = mirror_dists[np.arange(n), closest_mirrors]
+    target_hits = np.where(target_dists < closest_m_dists)[0]
     mirror_hits = [i for i in range(n) if i not in target_hits]
 
     new_origins = np.zeros_like(origins)
@@ -159,22 +161,40 @@ def _bounce(origins, directions, mirrors, targ_z):
     new_origins[target_hits] = target_origins
     new_directions[target_hits] = 0.0
 
-    # Now for each mirror
+    # exclude rays that hit the target from the mirror hit list
+    closest_mirrors[target_hits] = -1
+
+    # Now for each mirror, reflect rays that hit it. 
+    # IF a ray shoots exactly into an intersection w/another mirror, it will
+    # reflect off both.  (update origin once, call "reflect" twice)
+    #  It is not physically possible for a ray to hit more than two mirrors, but there is
+    # no check for this, so avoid mirror arangements with tripple+ intersections.
+
+    hit_counts = np.sum(mirror_dists == closest_m_dists[:, None], axis=1)
+
     for m in range(len(mirrors)):
-        hit_inds = np.where(closest_mirror == m)[0]
-        if len(hit_inds) == 0:
-            continue
 
-        # calculate the hit locations for the mirrors:
-        mirror_origins = origins[hit_inds] + directions[hit_inds] * mirror_dists[closest_mirror][hit_inds, None]
-        new_origins[hit_inds] = mirror_origins
-        new_directions[hit_inds] = mirrors[m].reflect(directions[hit_inds])
+        # find the new origin ONLY if the ray hit mirror m AND its hit_count is 1
+        # (if its hit count is higher, it will be reflected now, and the new origin will be calculated later)
+        final_hit = (hit_counts == 1) & (closest_mirrors == m)  # only these get moved now (origin changed)
+        refl_hit = (hit_counts >= 1) & (closest_mirrors == m)  # both get reflected now (unit vec changed)
 
-    return {'target_hit_inds': target_hits,
+        # reflect the directions:
+        new_directions[refl_hit] = mirrors[m].reflect(directions[refl_hit])
+        #print("Updating directions:", np.where(refl_hit))
+        hit_counts[refl_hit] -= 1
+
+        # Update the origins:
+        new_origins[final_hit] = origins[final_hit] + directions[final_hit] * closest_m_dists[final_hit, None]
+        #print("Updating origins:", np.where(final_hit))
+
+
+    rv= {'target_hit_inds': target_hits,
             'mirror_hit_inds': mirror_hits,
             'new_origins': new_origins,
             'new_directions': new_directions}
-
+    
+    return rv
 
 
 if __name__ == "__main__":
