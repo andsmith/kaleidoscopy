@@ -20,7 +20,53 @@ import cv2
 import matplotlib.pyplot as plt
 from threading import Thread, Lock
 import logging
+def plot_bounce(origins, directions, bounce, targ_z, mirrors):
+    """
+    In a 3d plot, show the eye/origin as a blue point, the target plane as a red plane with .25 transparency,
+    The mirrors as translucent green planes, incident rays as black lines, reflected rays as blue lines.
+    Plot ray/target intersections as red dots.
+    Plot ray/mirror intersections as green dots.
+    """
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
 
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_box_aspect((1, 1, 1))  # aspect ratio is 1:1:1
+
+    # plot the eye/origin
+    ax.scatter(0,0,0, c='b', marker='o', label='eye')
+
+    # plot the ray origins as black dots
+    #ax.scatter(origins[:, 0], origins[:, 1], origins[:, 2], c='k', marker='o', label='ray origins')
+
+    # plot the target plane
+    ax.plot_surface(np.linspace(-1, 1, 10), np.linspace(-1, 1, 10), targ_z * np.ones((10, 10)), alpha=0.25,
+                    color='r', label='target plane')
+
+    # plot the mirrors
+    #for mirror in mirrors:
+    #    mirror.plot(ax)
+
+    # plot the rays
+    ax.quiver(origins[:, 0], origins[:, 1], origins[:, 2],
+               directions[:, 0], directions[:, 1], directions[:, 2],
+               length=0.5, normalize=False, color='k', alpha=0.5)
+
+    # plot the target hits
+    target_hits = bounce['target_hit_inds']
+    target_origins = bounce['new_origins'][target_hits]
+    ax.scatter(target_origins[:, 0], target_origins[:, 1], target_origins[:, 2], c='r', marker='o',
+               label='target hit')
+
+    # plot the mirror hits
+    mirror_hits = bounce['mirror_hit_inds']
+    mirror_origins = bounce['new_origins'][mirror_hits]
+    ax.scatter(mirror_origins[:, 0], mirror_origins[:, 1], mirror_origins[:, 2], c='g', marker='o',
+               label='mirror hit')
+
+    plt.legend()
+    plt.show()  
 
 class Raytracer(object):
     def __init__(self, size, mirrors, targ_z, x_max, y_max, threaded=False):
@@ -53,16 +99,18 @@ class Raytracer(object):
         x, y = np.meshgrid(np.linspace(-self._x_max, self._x_max, self._size[0]),
                            np.linspace(-self._y_max, self._y_max, self._size[1]))
         z = np.ones_like(x) * self._targ_z
+        print(x,"\n", y,"\n", z)
+        import ipdb; ipdb.set_trace()
         origins = np.zeros((self._size[1], self._size[0], 3))
         directions = np.stack([x, y, z], axis=-1)
         directions = directions / np.linalg.norm(directions, axis=-1, keepdims=True)
         x_inds, y_inds = np.meshgrid(np.arange(self._size[0]), np.arange(self._size[1], dtype=np.int32))
 
         # flatten the arrays for easier / parrallel processing
-        self._origins = origins.reshape((-1, 3))
-        self._directions = directions.reshape((-1, 3))
-        self._x_inds = x_inds.reshape(-1)
-        self._y_inds = y_inds.reshape(-1)
+        self._origins = origins.reshape((-1, 3))[:2]
+        self._directions = directions.reshape((-1, 3))[:2]
+        self._x_inds = x_inds.reshape(-1)[:2]
+        self._y_inds = y_inds.reshape(-1)[:2]
 
     def get_map(self):
         with self._map_lock:
@@ -98,6 +146,7 @@ class Raytracer(object):
 
             while self._origins.size > 0:
                 bounce = _bounce(self._origins, self._directions, self._mirrors, self._targ_z)
+                plot_bounce(self._origins, self._directions, bounce, self._targ_z, self._mirrors)
 
                 logging.info("Iteration %i:  %i rays hit target, %i (%.3f %%) remain." % (
                     iter, len(bounce['target_hit_inds']), len(bounce['mirror_hit_inds']),
@@ -147,7 +196,7 @@ def _bounce(origins, directions, mirrors, targ_z):
     mirror_dists = np.stack([mirror.get_dist(origins, directions) for mirror in mirrors],
                                   axis=1)
     target_dists = (targ_z - origins[:, 2]) / directions[:, 2]
-    import ipdb; ipdb.set_trace()
+
     closest_mirrors = np.argmin(mirror_dists, axis=1)
     closest_m_dists = mirror_dists[np.arange(n), closest_mirrors]
     target_hits = np.where(target_dists < closest_m_dists)[0]

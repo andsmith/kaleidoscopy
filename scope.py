@@ -111,5 +111,4 @@ def start_scope():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    import ipdb; ipdb.set_trace()
     start_scope()
