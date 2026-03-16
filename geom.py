@@ -76,6 +76,9 @@ def test_seg_pt_dist():
     print(f"Distance from point to segment (3D): {distance_3d}")
 
 
+def pt_in_bbox(bbox, pt):
+    return bbox['x'][0] <= pt[0] < bbox['x'][1] and bbox['y'][0] <= pt[1] < bbox['y'][1]
+
 def make_test_check(size,sq_size=16, n_colors=2, randomize=False):
     """
     Make a test checkered pattern image of the given size.
