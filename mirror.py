@@ -20,23 +20,31 @@ import cv2
 import matplotlib.pyplot as plt
 from threading import Thread, Lock
 import logging
+from geom import rotate_2d
 
 
 class Mirror(object):
     """
-    planar, vertical mirror
+    planar, vertical mirror, defined by 2 points in the XY plane. The mirror extends infinitely in both directions, so the endpoints are not special.
+    The mirror is assumed to be perfectly reflective, and has no thickness.
     """
 
-    def __init__(self, p0, p1):
-        self.p0 = np.array(p0)
-        self.p1 = np.array(p1)
+    def __init__(self, p0_xy, p1_xy):
+        """
+        :param p0_xy: (x, y) coordinates of one point on the mirror
+        :param p1_xy: (x, y) coordinates of another point on the mirror (not the same as p0)
+        """
+        
+        self.p0 = np.array([p0_xy[0], p0_xy[1], 0])
+        self.p1 = np.array([p1_xy[0], p1_xy[1], 0])
         self._init_geom()
 
     def _init_geom(self):
         # normal, for reflecting rays:
         p_vec = self.p1 - self.p0
-        self.p_unit_2d = p_vec / np.linalg.norm(p_vec)
-        self._normal_3d = np.cross(self.p_unit_2d, [0, 0, 1])
+        self.p_unit_2d = p_vec[:2] / np.linalg.norm(p_vec[:2])
+        self._normal_3d = np.cross(np.array([self.p_unit_2d[0], self.p_unit_2d[1], 0]),
+                                   np.array([0, 0, 1]))
 
         # Coefficients for calculating intersections with rays:
         self._C = -(self.p0[1]-self.p1[1])*self.p0[0] - (self.p1[0]-self.p0[0])*self.p0[1]
@@ -103,6 +111,10 @@ class Mirror(object):
         return u_vec - 2 * u_dot_n * self._normal_3d
 
 def test_mirror_intersection(plot=False):
+    """
+    Test the mirror intersection function by comparing to the law of sines for a simple case where the mirror is at a 45 degree angle and the rays are in the XY plane.
+    """
+    
     mirror = Mirror([2, 0], [0, 2])
     mirror_angle = np.pi/4
     origin = np.zeros(3)
@@ -175,11 +187,12 @@ def test_mirror_reflection(plot=False):
     assert np.allclose(dots, sines)
 
 
-def make_iso_mirrors(angle_deg=30., size=0.9):
+def make_iso_mirrors(angle_deg=30., size=0.9, rotation_rad=0):
     """
     Make a set of mirrors in an isosceles triangle pointing up, centered around the origin.
     :param angle_deg: angle of the unique angle in the triangle
     :param size: size of the triangle (maximum distance from the center to a corner)
+    :param rotation_rad: rotation of the triangle in radians (counterclockwise)
     """
     p0 = np.array([-1, 0])
     p1 = np.array([1, 0])
@@ -189,11 +202,15 @@ def make_iso_mirrors(angle_deg=30., size=0.9):
     points = points - np.mean(points, axis=0)  # center around the origin
     r = np.max(np.linalg.norm(points, axis=1))  # maximum distance from the origin
     points = points / r * size  # scale to the desired size
+    if rotation_rad != 0:
+        points = rotate_2d(points, rotation_rad)
     mirrors = [Mirror(points[i], points[(i+1) % 3]) for i in range(3)]
     return mirrors
 
-def make_mirror_box(size=0.9):
-    points = np.array([[-1, -1], [1, -1], [1, 1], [-1, 1]]) * size
+def make_mirror_box(radius=0.9, rotation_rad=0):
+    points = np.array([[-1, -1], [1, -1], [1, 1], [-1, 1]]) * radius
+    if rotation_rad != 0:
+        points = rotate_2d(points, rotation_rad)
     mirrors = [Mirror(points[i], points[(i+1) % 4]) for i in range(4)]
     return mirrors
 

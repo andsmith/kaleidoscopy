@@ -1,9 +1,19 @@
 """
-Open a cv2 window to the kalleidoscope.
+Start the Kalleidoscope app:
+
+Running mode: 
+   * Run with an image as the input argument to focus the kalleidoscope on that image.
+   * Run with no argument to use the webcam as the input.
+
+
+
+
+
 """
 
 from raytracing import Raytracer
-from mirror import make_iso_mirrors,make_mirror_box
+from mirror_tube import MirrorTube
+
 from remap_img import remap
 import numpy as np
 import cv2
@@ -12,20 +22,41 @@ import logging
 import time
 import sys
 import os
+from enum import IntEnum
+
+from geom import TARG_Z,COLORS
+
+class RunMode(IntEnum):
+    UI_SHOWING = 0  # user is changing mirrors (start-up mode, "space" to toggle w/RUNNING).
+    RUNNING = 1  # Raytracer has started (may have even finished), video is mapping, this is the normal running mode.
+    SHUT_DOWN = 99  # everything should stop if they see this.
+
 
 from img_util import resize_and_pad
 
 class ScopeApp(object):
-    def __init__(self, size, threading=False, img = None):
-        self._bkg = img 
-        self._size = size if img is None else img.shape[:2][::-1]
-        self._frame = np.zeros((size[1], size[0], 3), dtype=np.uint8)
-        self._frame_out = np.zeros((size[1], size[0], 3), dtype=np.uint8)
+    def __init__(self, output_size=(1920, 1080), input_size=(1200,1024), input_img = None):
+        """
+        :param output_size: the size of the output video stream (width, height)
+        :param input_size: the size of the input video stream (width, height), ignored if input_img is provided
+        :param input_img: if provided, this image will be used instead of the webcam feed. Should be a numpy array.
+        """
+        
+        self._bkg = input_img 
+        self.out_size = output_size
+        self.in_size = input_size if input_img is None else input_img.shape[:2][::-1]
+        self._frame_in = np.zeros((self.in_size[1], self.in_size[0], 3), dtype=np.uint8)
+        self._frame_out = np.zeros((self.out_size[1], self.out_size[0], 3), dtype=np.uint8)
         self._f_no = 0
+        
+        self.mode = RunMode.UI_SHOWING
 
-        self._init_mirrors()
+        #self._init_mirrors()
         self._init_geom(threading)
         self._init_cam()
+        self._init_ui()
+        
+    def _init_ui(self):
 
     def _init_mirrors(self):
         # Create a polygon of mirrors.
@@ -35,7 +66,7 @@ class ScopeApp(object):
     def _init_geom(self, threaded):
         # Determine the field of view for the image plane
         # Create the raytracer.
-        d_target = 2.0
+        d_target = TARG_Z
         x_max = 1.0
         aspect = self._size[0] / self._size[1]
         y_max = x_max * aspect
@@ -99,13 +130,14 @@ class ScopeApp(object):
 
 
 def start_scope():
-    size = (7, 7)
+    
     if len(sys.argv)>1:
         img = cv2.imread(sys.argv[1])
-        img = resize_and_pad(img, size)
+        img = resize_and_pad(img,  (7, 7))
     else:
         img = None
-    app = ScopeApp(size, img=img)
+    out_size = 1920, 1080
+    app = ScopeApp(out_size, input_img=img)
     app.start()
 
 

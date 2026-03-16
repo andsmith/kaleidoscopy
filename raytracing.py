@@ -99,8 +99,8 @@ class Raytracer(object):
         x, y = np.meshgrid(np.linspace(-self._x_max, self._x_max, self._size[0]),
                            np.linspace(-self._y_max, self._y_max, self._size[1]))
         z = np.ones_like(x) * self._targ_z
-        print(x,"\n", y,"\n", z)
-        import ipdb; ipdb.set_trace()
+
+
         origins = np.zeros((self._size[1], self._size[0], 3))
         directions = np.stack([x, y, z], axis=-1)
         directions = directions / np.linalg.norm(directions, axis=-1, keepdims=True)
