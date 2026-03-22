@@ -12,19 +12,21 @@ from mirror_tube import MirrorTube
 
 
 class PresetFactory:
-    PRESET_NAMES = ['equilateral triangle', 'acute isoceles triangle', 'obtuse isoceles triangle', 'square', 'hexagon']
+    PRESET_NAMES = ['equilateral triangle', 'acute isoceles triangle', 'obtuse isoceles triangle', 'square', 'hexagon', '5-star']
     @staticmethod
     def make_preset(name, r=0.4):
         if name == 'equilateral triangle':
-            return MirrorTube.make_isoceles(radius=r, iso_angle_deg=30)
+            return MirrorTube.make_isoceles(radius=r, iso_angle_deg=60)
         elif name == 'acute isoceles triangle':
-            return MirrorTube.make_isoceles(radius=r, iso_angle_deg=20)
+            return MirrorTube.make_isoceles(radius=r, iso_angle_deg=15)
         elif name == 'obtuse isoceles triangle':
-            return MirrorTube.make_isoceles(radius=r, iso_angle_deg=75)
+            return MirrorTube.make_isoceles(radius=r, iso_angle_deg=120)
         elif name == 'square':
             return MirrorTube.make_box(radius=r)
         elif name == 'hexagon':
             return MirrorTube.make_reg_n_gon(6, radius=r)
+        elif name == '5-star':
+            return MirrorTube.make_n_star(5, rad_outer=r, rad_inner=r/2)
         else:
             raise ValueError(f'Unknown preset name: {name}')
 

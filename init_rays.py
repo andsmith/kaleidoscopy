@@ -19,7 +19,9 @@ def compute_fov(w_out, h_out):
     """
     Compute the half-extents of the FOV rectangle in natural coords at TARG_Z.
 
-    The wider dimension spans [-1, 1]; the narrower is scaled to maintain aspect ratio.
+    The narrower dimension spans [-1, 1] so the unit square [-1,1]x[-1,1]
+    just fits inside the view; the wider dimension extends beyond +/-1
+    to fill the output aspect ratio.
 
     :param w_out: output image width in pixels
     :param h_out: output image height in pixels
@@ -27,9 +29,9 @@ def compute_fov(w_out, h_out):
     """
     a = w_out / h_out
     if a >= 1.0:
-        return 1.0, 1.0 / a
-    else:
         return a, 1.0
+    else:
+        return 1.0, 1.0 / a
 
 
 def _pixel_size(s, x_max, y_max, w_out, h_out):
@@ -138,7 +140,7 @@ def make_ray_grid(w_out, h_out, img_z, x_max, y_max, targ_z=TARG_Z, start_at_eye
     """
     s = img_z / targ_z
     x_vals = np.linspace(-x_max * s, x_max * s, w_out)
-    y_vals = np.linspace(-y_max * s, y_max * s, h_out)
+    y_vals = np.linspace(y_max * s, -y_max * s, h_out)  # top row = +y (up), matching screen convention
 
     if add_noise:
         dx_spacing = 2 * x_max * s / max(w_out - 1, 1)

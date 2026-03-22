@@ -54,9 +54,10 @@ MARGIN_PX = 12
 VERT_SPLIT_REL = 0.5
 
 # Colors
-FOV_LINE_COLOR   = COLORS['gray']
-TARGET_LINE_COLOR = COLORS['red']
-IMAGE_PLANE_COLOR = COLORS['yellow']
+FOV_LINE_COLOR         = COLORS['gray']
+TARGET_LINE_COLOR      = COLORS['red']
+IMAGE_PLANE_COLOR      = COLORS['yellow']
+IMAGE_FOOTPRINT_COLOR  = COLORS['gray']   # image-border footprint in the top-down panel
 MIRROR_FAINT_ALPHA = 0.35
 MIRROR_DARK_ALPHA  = 0.85
 
@@ -78,10 +79,10 @@ def _compute_panels(img_w, img_h, margin):
     mx = img_w // 2
     my = int(img_h * VERT_SPLIT_REL)
     return {
-        'text':    {'x0': margin,      'y0': margin,      'x1': mx - margin,      'y1': my - margin},
-        'topdown': {'x0': mx + margin, 'y0': margin,      'x1': img_w - margin,   'y1': my - margin},
+        'topdown': {'x0': margin,      'y0': margin,      'x1': mx - margin,      'y1': my - margin},
+        'yz':      {'x0': mx + margin, 'y0': margin,      'x1': img_w - margin,   'y1': my - margin},
         'xz':      {'x0': margin,      'y0': my + margin, 'x1': mx - margin,      'y1': img_h - margin},
-        'yz':      {'x0': mx + margin, 'y0': my + margin, 'x1': img_w - margin,   'y1': img_h - margin},
+        'bounce':  {'x0': mx + margin, 'y0': my + margin, 'x1': img_w - margin,   'y1': img_h - margin},
     }
 
 
@@ -346,9 +347,9 @@ def _build_transforms(params, panels, pad=0.12, zooms=None):
         # XZ side: x horizontal, z vertical (z=0 eye at top, z=targ_z at bottom)
         'xz':      PanelTransform(-xr, xr,  0,  zr, panels['xz'],
                                   flip_y=False, zoom=zs.get('xz')),
-        # YZ side: y horizontal, z vertical
-        'yz':      PanelTransform(-yr, yr,  0,  zr, panels['yz'],
-                                  flip_y=False, zoom=zs.get('yz')),
+        # YZ side (flipped): z horizontal, y vertical (y up)
+        'yz':      PanelTransform(0,  zr, -yr, yr, panels['yz'],
+                      flip_y=True, zoom=zs.get('yz')),
     }
 
 
@@ -475,11 +476,9 @@ def _extreme_mirror_indices(mirrors, axis):
 
 def _draw_mirror_lines_xy(img, mirrors, tf):
     """Draw mirror segments in the XY top-down panel."""
-    left_idx, right_idx = _extreme_mirror_indices(mirrors, 0)
-    for i, m in enumerate(mirrors):
-        is_extreme = (i == left_idx or i == right_idx)
-        color = _alpha_color(COLORS['white'], MIRROR_DARK_ALPHA if is_extreme else MIRROR_FAINT_ALPHA)
-        thickness = 2 if is_extreme else 1
+    color = _alpha_color(COLORS['white'], MIRROR_DARK_ALPHA)
+    thickness = 2
+    for m in mirrors:
         p0 = tf.to_px(m.p0[0], m.p0[1])
         p1 = tf.to_px(m.p1[0], m.p1[1])
         seg = tf.clip_line(p0, p1)
@@ -487,11 +486,12 @@ def _draw_mirror_lines_xy(img, mirrors, tf):
             cv2.line(img, seg[0], seg[1], color, thickness, cv2.LINE_AA)
 
 
-def _draw_mirror_lines_side(img, mirrors, tf, axis):
+def _draw_mirror_lines_side(img, mirrors, tf, axis, line_orientation='vertical'):
     """
     Draw mirror projections in a side panel (XZ or YZ).
-    Mirrors are vertical planes → each endpoint projects to a vertical line
-    spanning z=0 to z=targ_z.  `axis` is 0 for XZ (use x), 1 for YZ (use y).
+    Mirrors are vertical planes; depending on panel orientation they render as
+    either vertical or horizontal lines. `axis` is 0 for XZ (use x),
+    1 for YZ (use y).
     """
     # Identify extreme endpoints for the given axis
     all_coords = [m.p0[axis] for m in mirrors] + [m.p1[axis] for m in mirrors]
@@ -510,10 +510,15 @@ def _draw_mirror_lines_side(img, mirrors, tf, axis):
             is_extreme = (np.isclose(coord, c_min) or np.isclose(coord, c_max))
             color = _alpha_color(COLORS['white'], MIRROR_DARK_ALPHA if is_extreme else MIRROR_FAINT_ALPHA)
             thickness = 2 if is_extreme else 1
-            # Draw a vertical line spanning the full z range of the panel.
-            pt_top = tf.to_px(coord, 0.0)
-            pt_bot = tf.to_px(coord, 1e9)
-            seg = tf.clip_line(pt_top, pt_bot)
+            if line_orientation == 'vertical':
+                # Constant horizontal coord, spanning the panel's vertical axis.
+                pt_a = tf.to_px(coord, 0.0)
+                pt_b = tf.to_px(coord, 1e9)
+            else:
+                # Constant vertical coord, spanning the panel's horizontal axis.
+                pt_a = tf.to_px(0.0, coord)
+                pt_b = tf.to_px(1e9, coord)
+            seg = tf.clip_line(pt_a, pt_b)
             if seg:
                 cv2.line(img, seg[0], seg[1], color, thickness, cv2.LINE_AA)
 
@@ -542,13 +547,13 @@ def _draw_fov_yz(img, y_max, img_z, targ_z, tf):
     eye = tf.to_px(0, 0)
     s = img_z / targ_z
 
-    _draw_dotted_line(img, eye, tf.to_px(-y_max, targ_z), FOV_LINE_COLOR, clip_tf=tf)
-    _draw_dotted_line(img, eye, tf.to_px( y_max, targ_z), FOV_LINE_COLOR, clip_tf=tf)
+    _draw_dotted_line(img, eye, tf.to_px(targ_z, -y_max), FOV_LINE_COLOR, clip_tf=tf)
+    _draw_dotted_line(img, eye, tf.to_px(targ_z,  y_max), FOV_LINE_COLOR, clip_tf=tf)
 
-    _draw_dotted_line(img, tf.to_px(-y_max * s, img_z), tf.to_px(y_max * s, img_z),
+    _draw_dotted_line(img, tf.to_px(img_z, -y_max * s), tf.to_px(img_z, y_max * s),
                       IMAGE_PLANE_COLOR, thickness=2, clip_tf=tf)
 
-    _draw_dotted_line(img, tf.to_px(-y_max, targ_z), tf.to_px(y_max, targ_z),
+    _draw_dotted_line(img, tf.to_px(targ_z, -y_max), tf.to_px(targ_z, y_max),
                       TARGET_LINE_COLOR, clip_tf=tf)
 
 
@@ -559,6 +564,23 @@ def _draw_fov_box_topdown(img, x_max, y_max, tf):
     for i in range(4):
         _draw_dotted_line(img, px_corners[i], px_corners[(i + 1) % 4],
                           TARGET_LINE_COLOR, clip_tf=tf)
+
+
+def _draw_image_footprint_topdown(img, x_max, y_max, tf):
+    """Dotted rectangle for target image boundaries in the XY top-down panel.
+
+    This is the aspect-ratio-constrained target-image region inside the full
+    FOV box: an inscribed box with half-extent min(x_max, y_max).  It touches
+    the red FOV boundary on either top/bottom or left/right, depending on
+    output aspect ratio.
+    """
+    h = min(x_max, y_max)
+    ix, iy = h, h
+    corners = [(-ix, -iy), (ix, -iy), (ix, iy), (-ix, iy)]
+    px_corners = [tf.to_px(x, y) for x, y in corners]
+    for i in range(4):
+        _draw_dotted_line(img, px_corners[i], px_corners[(i + 1) % 4],
+                          IMAGE_FOOTPRINT_COLOR, clip_tf=tf)
 
 
 def _draw_eye(img, transforms):
@@ -612,7 +634,7 @@ def _project(pt3, axes):
     elif axes == 'xz':
         return pt3[0], pt3[2]
     elif axes == 'yz':
-        return pt3[1], pt3[2]
+        return pt3[2], pt3[1]
 
 
 _PANEL_AXES = {'topdown': 'xy', 'xz': 'xz', 'yz': 'yz'}
@@ -694,9 +716,9 @@ def _draw_rays(img, mode, subset_inds, origins, init_dirs, bounces, transforms):
                     continue
                 for k, step in enumerate(bounces):
                     is_last = (k == len(bounces) - 1)
-                    alpha     = 0.75 if is_last else 0.20
-                    thickness = 2    if is_last else 1
-                    color = tuple(int(c * alpha) for c in COLORS['orange'])
+                    alpha     = 0.40
+                    thickness = 1
+                    color = tuple(int(c * alpha) for c in COLORS['white'])
                     so_px = tf.to_px(*_project(step['step_origins'][idx], axes))
                     ho_px = tf.to_px(*_project(step['hit_origins'][idx], axes))
                     seg = tf.clip_line(so_px, ho_px)
@@ -862,12 +884,13 @@ def render_side_view(raytracer, img_size, state=None, mode='bounce', n_rays=N_RA
         mirrors = params['mirrors']
 
         _draw_mirror_lines_xy(img, mirrors, tfs['topdown'])
-        _draw_mirror_lines_side(img, mirrors, tfs['xz'], axis=0)
-        _draw_mirror_lines_side(img, mirrors, tfs['yz'], axis=1)
+        _draw_mirror_lines_side(img, mirrors, tfs['xz'], axis=0, line_orientation='vertical')
+        _draw_mirror_lines_side(img, mirrors, tfs['yz'], axis=1, line_orientation='horizontal')
 
         _draw_fov_xz(img, x_max, img_z, targ_z, tfs['xz'])
         _draw_fov_yz(img, y_max, img_z, targ_z, tfs['yz'])
         _draw_fov_box_topdown(img, x_max, y_max, tfs['topdown'])
+        _draw_image_footprint_topdown(img, x_max, y_max, tfs['topdown'])
 
         _draw_eye(img, tfs)
 
@@ -884,7 +907,7 @@ def render_side_view(raytracer, img_size, state=None, mode='bounce', n_rays=N_RA
         _draw_panel_label(img, panels[key], label)
 
     _, bounce_count = raytracer.get_map()
-    _draw_bounce_map(img, panels['text'], bounce_count)
+    _draw_bounce_map(img, panels['bounce'], bounce_count)
 
     return img
 
@@ -915,7 +938,7 @@ if __name__ == "__main__":
                        x_max=x_max, y_max=y_max, img_z=img_z, targ_z=TARG_Z)
 
     state  = SideViewState(mode='bounce')
-    window = "side_view  [b/h/s/t=mode  r=reset zoom  scroll=zoom  q=quit]"
+    window = "side_view  [b=bounce/hit  s/t=mode  r=reset zoom  scroll=zoom  q=quit]"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window, *OUT_SIZE)
     cv2.setMouseCallback(window, state.mouse_callback)
@@ -928,9 +951,7 @@ if __name__ == "__main__":
         if k in (ord('q'), 27):
             break
         elif k == ord('b'):
-            state.mode = 'bounce'
-        elif k == ord('h'):
-            state.mode = 'hit'
+            state.mode = 'hit' if state.mode == 'bounce' else 'bounce'
         elif k == ord('s'):
             state.mode = 'start'
         elif k == ord('t'):

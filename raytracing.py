@@ -10,23 +10,23 @@ Coordinate conventions:
     - target plane is at z = TARGET_DIST (TARGET_DIST > EYE_DIST)
     - mirrors are vertical, and are touching the target plane (no ray will go under the mirror to hit the target)
     - mirrors are defined by two points, p0 and p1 in the XY plane, extend indfinitely in both z directions
-    - The field of view is set so image would fill the target plane if there were no mirrors:
-      - X-axis of the target (the screen) is normalized to [-1, 1], 
-      - Y-axis is normalized to [-1, 1] / aspect ratio
+    - The field of view is set so the unit square [-1,1]x[-1,1] just fits inside:
+      - The narrower axis spans [-1, 1]
+      - The wider axis extends beyond +/-1 to fill the output aspect ratio
 
 """
 import numpy as np
 import cv2
 import json
 
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
 import logging
 from init_rays import make_ray_grid
 
 
 
 class Raytracer(object):
-    def __init__(self, size, mirrors, targ_z, x_max, y_max, img_z, threaded=False, bounce_file=None):
+    def __init__(self, size, mirrors, targ_z, x_max, y_max, img_z, threaded=False, bounce_file=None, initial_map=None):
         """
         :param size: (w_out, h_out) output image size in pixels
         :param mirrors: list of Mirror objects
@@ -51,6 +51,11 @@ class Raytracer(object):
         self._map_lock = Lock()
         self._threaded = threaded
         self._bounce_file = bounce_file
+        self._initial_map = initial_map
+        self._map_version = 0
+        self._int_map_cache_key = None   # (src_w, src_h, pan_x, pan_y, zoom)
+        self._int_map_cache_val = None   # (x_int, y_int, oob_mask, map_version)
+        self._stop_event = Event()
 
     def _init_rays(self):
         """
@@ -69,9 +74,19 @@ class Raytracer(object):
         self._x_inds = x_inds.reshape(-1)
         self._y_inds = y_inds.reshape(-1)
 
-        # K map: identity (each output pixel maps to itself) until rays fill it in
-        self._map = [x_inds.copy(), y_inds.copy()]
+        # Float map: natural coords (h, w, 2) float32.
+        # Start from preserved map (live-edit) or identity (each pixel maps to its own natural coord).
+        if self._initial_map is not None:
+            self._map = self._initial_map.copy()
+        else:
+            x_nat = np.linspace(-self._x_max, self._x_max, w_out, dtype=np.float32)
+            y_nat = np.linspace(self._y_max, -self._y_max, h_out, dtype=np.float32)
+            fx_grid, fy_grid = np.meshgrid(x_nat, y_nat)
+            self._map = np.stack([fx_grid, fy_grid], axis=0)   # (2, h, w) channel-first
         self._bounce_count = np.full((h_out, w_out), -1, dtype=np.int32)
+        self._map_version = 0
+        self._int_map_cache_key = None
+        self._int_map_cache_val = None
 
         # Step-mode state (used by step() and get_bounces/get_initial_rays)
         N = len(self._origins)
@@ -88,8 +103,135 @@ class Raytracer(object):
         self._bounce_log = self._build_bounce_header() if self._bounce_file is not None else None
 
     def get_map(self):
+        """Return (float_map, bounce_count).  float_map is (2, h_out, w_out) float32
+        with natural-coordinate values: float_map[0] = fx, float_map[1] = fy."""
         with self._map_lock:
             return self._map, self._bounce_count
+
+    def get_integer_map(self, src_w, src_h, pan_x=0.0, pan_y=0.0, zoom=1.0):
+        """
+        Convert the float map to float32 remap arrays for cv2.remap.
+
+        The source image of size (src_w, src_h) is mapped into the ±1 natural-coord
+        box preserving aspect ratio (contain mode).  pan_x/pan_y are in output pixel
+        units (same as UILayer.view_transform); zoom is the magnification factor.
+
+        Results are cached; the cache is invalidated automatically each raytracing step.
+
+        :returns: (x_map, y_map, oob_mask)
+            x_map, y_map  -- (h_out, w_out) float32, ready for cv2.remap
+            oob_mask       -- (h_out, w_out) bool, True where pixel is out-of-bounds
+                             (letterbox/pillarbox or pan OOB), or None if none OOB
+        """
+        cache_key = (src_w, src_h, pan_x, pan_y, zoom)
+        with self._map_lock:
+            version = self._map_version
+            if (self._int_map_cache_key == cache_key
+                    and self._int_map_cache_val is not None
+                    and self._int_map_cache_val[3] == version):
+                v = self._int_map_cache_val
+                return v[0], v[1], v[2]
+            float_map = self._map.copy()
+
+        w_out, h_out = self._size
+        x_max32 = np.float32(self._x_max)
+        y_max32 = np.float32(self._y_max)
+
+        fx = float_map[0]   # (h_out, w_out) float32, contiguous
+        fy = float_map[1]
+
+        # -- pan/zoom path --
+        if pan_x == 0.0 and pan_y == 0.0 and zoom == 1.0:
+            # Fast path: skip the output-pixel-space round-trip entirely.
+            # pan_oob = any target coord outside the output window natural range.
+            if (fx.max() <= x_max32 and fx.min() >= -x_max32
+                    and fy.max() <= y_max32 and fy.min() >= -y_max32):
+                pan_oob = None
+            else:
+                pan_oob = (fx < -x_max32) | (fx > x_max32) | (fy < -y_max32) | (fy > y_max32)
+            fx_view = fx
+            fy_view = fy
+        else:
+            # General path: convert to output pixel space, apply pan/zoom, convert back.
+            w1 = np.float32(w_out - 1)
+            h1 = np.float32(h_out - 1)
+            sx_out = np.float32(w1 / (2.0 * self._x_max))
+            sy_out = np.float32(h1 / (2.0 * self._y_max))
+            cx = np.float32(w1 / 2.0 + pan_x)
+            cy = np.float32(h1 / 2.0 + pan_y)
+            inv_z = np.float32(1.0 / zoom)
+            half_w = np.float32(w1 / 2.0)
+            half_h = np.float32(h1 / 2.0)
+            vx = cx + (np.add(fx, x_max32) * sx_out - half_w) * inv_z
+            vy = cy + (np.subtract(y_max32, fy) * sy_out - half_h) * inv_z
+            if (vx.max() < w_out and vx.min() >= 0
+                    and vy.max() < h_out and vy.min() >= 0):
+                pan_oob = None
+            else:
+                pan_oob = (vx < 0) | (vx >= w_out) | (vy < 0) | (vy >= h_out)
+            fx_view = vx * np.float32(2.0 * self._x_max / (w_out - 1)) - x_max32
+            fy_view = y_max32 - vy * np.float32(2.0 * self._y_max / (h_out - 1))
+
+        # -- source pixel mapping (contain mode in the unit square [-1,1]²) --
+        # The source image is scaled to just fit inside the ±1 unit square,
+        # preserving aspect ratio.  Areas outside the image are marked OOB.
+        a = src_w / src_h
+        x_map = np.empty((h_out, w_out), dtype=np.float32)
+        y_map = np.empty((h_out, w_out), dtype=np.float32)
+
+        if a >= 1.0:
+            # Wider source: fit width to [-1, 1], letterbox top/bottom.
+            np.add(fx_view, np.float32(1.0), out=x_map)
+            np.multiply(x_map, np.float32((src_w - 1) / 2.0), out=x_map)
+            np.rint(x_map, out=x_map)
+
+            y_half32 = np.float32(1.0 / a)
+            np.subtract(y_half32, fy_view, out=y_map)
+            np.multiply(y_map, np.float32(a * (src_h - 1) / 2.0), out=y_map)
+            np.rint(y_map, out=y_map)
+        else:
+            # Taller source: fit height to [-1, 1], pillarbox left/right.
+            np.subtract(np.float32(1.0), fy_view, out=y_map)
+            np.multiply(y_map, np.float32((src_h - 1) / 2.0), out=y_map)
+            np.rint(y_map, out=y_map)
+
+            x_half32 = np.float32(a)
+            np.add(fx_view, x_half32, out=x_map)
+            np.multiply(x_map, np.float32((src_w - 1) / (2.0 * a)), out=x_map)
+            np.rint(x_map, out=x_map)
+
+        # OOB: clip and flag anything outside valid source pixel range on either axis
+        x_lo, x_hi = float(x_map.min()), float(x_map.max())
+        y_lo, y_hi = float(y_map.min()), float(y_map.max())
+        x_oob = (x_map < 0.0) | (x_map > float(src_w - 1)) if x_lo < 0.0 or x_hi > src_w - 1 else None
+        y_oob = (y_map < 0.0) | (y_map > float(src_h - 1)) if y_lo < 0.0 or y_hi > src_h - 1 else None
+        if x_oob is not None:
+            np.clip(x_map, 0.0, float(src_w - 1), out=x_map)
+        if y_oob is not None:
+            np.clip(y_map, 0.0, float(src_h - 1), out=y_map)
+        if x_oob is None and y_oob is None:
+            aspect_oob = None
+        elif x_oob is None:
+            aspect_oob = y_oob
+        elif y_oob is None:
+            aspect_oob = x_oob
+        else:
+            aspect_oob = x_oob | y_oob
+
+        # Build combined OOB mask (None when no pixels are OOB)
+        if pan_oob is None and aspect_oob is None:
+            oob_mask = None
+        elif pan_oob is None:
+            oob_mask = aspect_oob
+        elif aspect_oob is None:
+            oob_mask = pan_oob
+        else:
+            oob_mask = pan_oob | aspect_oob
+
+        with self._map_lock:
+            self._int_map_cache_key = cache_key
+            self._int_map_cache_val = (x_map, y_map, oob_mask, version)
+        return x_map, y_map, oob_mask
 
     # ------------------------------------------------------------------
     # Side-view / debug interface  (same API as FakeRaytracer)
@@ -217,15 +359,15 @@ class Raytracer(object):
         hit_dirs      = self._step_dirs.copy()
         hit_dirs[act] = bounce['new_directions']   # 0 for target-hits, reflected for mirrors
 
-        # Update K map for rays that reached the target this step
+        # Update float map for rays that reached the target this step
         if len(t_local):
             global_t = act[t_local]
             target_xy = bounce['new_origins'][t_local, :2]
-            targ_px, targ_py = self._unscale_coords(target_xy[:, 0], target_xy[:, 1])
             with self._map_lock:
-                self._map[0][self._y_inds[global_t], self._x_inds[global_t]] = targ_px
-                self._map[1][self._y_inds[global_t], self._x_inds[global_t]] = targ_py
+                self._map[0, self._y_inds[global_t], self._x_inds[global_t]] = target_xy[:, 0]
+                self._map[1, self._y_inds[global_t], self._x_inds[global_t]] = target_xy[:, 1]
                 self._bounce_count[self._y_inds[global_t], self._x_inds[global_t]] = n_step
+                self._map_version += 1
         else:
             global_t = np.empty(0, dtype=np.int32)
 
@@ -275,24 +417,6 @@ class Raytracer(object):
         return bool(np.any(self._step_active))
 
     # ------------------------------------------------------------------
-
-    def _unscale_coords(self, x, y):
-        """
-        Convert natural target-plane coords to output image pixel indices (int32).
-
-        Natural coords: x in [-x_max, +x_max], y in [-y_max, +y_max].
-        Pixel convention (from README): left column = x=-1, right = x=+1,
-          top row = y=+1, bottom row = y=-1 (y axis is flipped).
-
-        Returns int32 arrays suitable for the remap() C extension's x_map / y_map.
-        Values are clamped to valid pixel range.
-        """
-        w_out, h_out = self._size
-        px = (x + self._x_max) / (2.0 * self._x_max) * w_out
-        py = (self._y_max - y) / (2.0 * self._y_max) * h_out
-        px = np.clip(px, 0, w_out - 1).astype(np.int32)
-        py = np.clip(py, 0, h_out - 1).astype(np.int32)
-        return px, py
 
     def _build_bounce_header(self):
         """Build the header section of the bounce log from the current initial ray state."""
@@ -349,31 +473,27 @@ class Raytracer(object):
         self._bounce_log['iterations'].append(iter_record)
         self._write_bounce_log(self._bounce_log)
 
+    def stop(self):
+        """Signal the background thread to stop after its current step.  No-op if not threaded."""
+        self._stop_event.set()
+
     def start(self):
+        # Always initialise rays synchronously so get_map() is usable immediately
+        # from the main thread without waiting for the background thread to be scheduled.
+        self._stop_event.clear()
+        self._init_rays()
 
         def _trace():
-            """
-             Trace the image map through the mirrors to the target plane:
-            1. For each ray, see which mirror (or the target) it hits first.
-            2. Separate the rays into groups depending on what they hit,
-                2.a. if they hit a mirror, keep bouncing them.
-                2.b. if they hit the target, assign the target xy locations as the map values for those rays.
-                map_x, map_y = np.zeros((h_px, w_px)), np.zeros((h_px, w_px))
-            3. Repeat until all rays have hit the target.
-            """
-            self._init_rays()
-
-            while True:
+            """Run all raytracing steps, updating self._map incrementally."""
+            while not self._stop_event.is_set():
                 has_more = self.step(record_bounces=False)
-
                 if not has_more:
                     break
-
             logging.info("Raytracing complete in %i iterations.", self._step_index)
 
         if self._threaded:
             # Thread will update self._map as results are computed.
-            self._thread = Thread(target=_trace)
+            self._thread = Thread(target=_trace, daemon=True)
             self._thread.start()
         else:
             _trace()

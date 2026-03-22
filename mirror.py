@@ -25,7 +25,8 @@ from geom import rotate_2d
 
 class Mirror(object):
     """
-    planar, vertical mirror, defined by 2 points in the XY plane. The mirror extends infinitely in both directions, so the endpoints are not special.
+    planar, vertical mirror, defined by 2 points in the XY plane.
+    Intersections are constrained to the finite XY segment [p0, p1].
     The mirror is assumed to be perfectly reflective, and has no thickness.
     """
 
@@ -42,6 +43,7 @@ class Mirror(object):
     def _init_geom(self):
         # normal, for reflecting rays:
         p_vec = self.p1 - self.p0
+        self._seg_len_2d = np.linalg.norm(p_vec[:2])
         self.p_unit_2d = p_vec[:2] / np.linalg.norm(p_vec[:2])
         self._normal_3d = np.cross(np.array([self.p_unit_2d[0], self.p_unit_2d[1], 0]),
                                    np.array([0, 0, 1]))
@@ -54,7 +56,7 @@ class Mirror(object):
     def get_dist(self, origins, directions):
         """
         Calculate the intersection of the mirror with the rays.
-        Do not consider mirror endpoints (i.e. extend mirrors indefinitely).
+        Intersections are only valid when they hit the finite XY segment [p0, p1].
 
         Since Mirror objects are vertical planes, let the two points be:
           P0 = (P0x, P0y, 0) and P1 = (P1x, P1y, 0)
@@ -71,14 +73,12 @@ class Mirror(object):
 
         :param origins: Nx3 array of ray origins
         :param directions: Nx3 array of ray directions (unit vectors)
-        :returns: N element array of distances to the mirror (negative = no hit)
+        :returns: N element array of distances to the mirror (np.inf = no hit)
         """
         Rx = origins[:, 0]
         Ry = origins[:, 1]
-        Rz = origins[:, 2]
         Ux = directions[:, 0]
         Uy = directions[:, 1]
-        Uz = directions[:, 2]
 
         num = -(self._Cx * Rx + self._Cy * Ry + self._C) 
         denom = (self._Cx * Ux + self._Cy * Uy)
@@ -91,8 +91,20 @@ class Mirror(object):
         d[parallel] = np.inf
         d[hits] = num[hits] / denom[hits]
 
-        # also mask out negative distances (rays going away from the mirror)
+        # Mask out negative distances (rays going away from the mirror)
         d[d < 0] = np.inf
+
+        # Restrict hits to the finite segment endpoints in XY.
+        # Project intersection points onto the segment axis and require
+        # 0 <= projection_length <= segment_length.
+        ix = Rx + d * Ux
+        iy = Ry + d * Uy
+        rel_x = ix - self.p0[0]
+        rel_y = iy - self.p0[1]
+        proj_len = rel_x * self.p_unit_2d[0] + rel_y * self.p_unit_2d[1]
+        eps = 1e-9
+        on_segment = (proj_len >= -eps) & (proj_len <= self._seg_len_2d + eps)
+        d[~on_segment] = np.inf
 
         return d
     

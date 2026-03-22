@@ -1,5 +1,13 @@
 # kaleidoscopy - (n) the use of a kaleidoscope
 
+
+Run: `> python scope.py` to start the app with the webcam. 
+
+Run: 
+
+
+
+
 (cf. *microscopy*, *spectroscopy*, etc.)
 
 Define a kaleidoscope as 2-valued function of 2 variables K(i,j), mapping screen coordinates (i.e. pixel locations) to their origin in the source image, assuming they bounced around in a kaleidoscope with a given geometry.  If that sounds like raytracing, it is, but the key insight for this project is we only need to compute this once, in the beginning. To display any arbitrary image or video through the kaleidoscope just takes look-ups.  Kaleidoscopy works in these 2 parts:
