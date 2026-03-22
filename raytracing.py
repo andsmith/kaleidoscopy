@@ -246,6 +246,176 @@ def _bounce(origins, directions, mirrors, targ_z):
     return rv
 
 
+class FakeRaytracer:
+    """
+    Stub raytracer that returns a placeholder image of the correct output size.
+    Can optionally be configured with mirror geometry to generate synthetic ray
+    bounce data for side_view.py queries.
+    """
+
+    _FAKE_GRID_LONG = 20   # rays along the longer dimension for fake bounce grid
+    _MAX_BOUNCES = 8
+
+    def __init__(self, size, mirrors=None, x_max=1.0, y_max=None, img_z=None, targ_z=None):
+        """
+        :param size: (width, height) of the output image
+        :param mirrors: list of Mirror objects (optional; enables ray data generation)
+        :param x_max: FOV half-width in natural coords at targ_z (default 1.0)
+        :param y_max: FOV half-height in natural coords (default x_max * h/w)
+        :param img_z: image plane Z coordinate (required if mirrors provided)
+        :param targ_z: target plane Z coordinate (default TARG_Z from geom)
+        """
+        from geom import TARG_Z as _TARG_Z
+        self._size = size
+        self._mirrors = mirrors
+        w, h = size
+        self._x_max = x_max
+        self._y_max = y_max if y_max is not None else x_max * h / w
+        self._targ_z = targ_z if targ_z is not None else _TARG_Z
+        self._img_z = img_z
+
+        self._origins = None
+        self._directions = None
+        self._ray_grid_shape = None
+        self._bounces = []
+
+        if mirrors is not None and img_z is not None:
+            self._generate_fake_rays()
+
+    def render(self):
+        """Return a gray placeholder image with a 'rendering not implemented yet' message."""
+        w, h = self._size
+        img = np.full((h, w, 3), 30, dtype=np.uint8)
+        text = "rendering not implemented yet"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 1.0
+        thickness = 2
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+        x = (w - tw) // 2
+        y = (h + th) // 2
+        cv2.putText(img, text, (x, y), font, scale, (180, 180, 180), thickness)
+        return img
+
+    def _generate_fake_rays(self):
+        """
+        Generate a coarse ray grid and simulate real bounces for side_view queries.
+        Uses actual mirror geometry so the paths are geometrically correct.
+        """
+        w, h = self._size
+        aspect = w / h
+        if aspect >= 1.0:
+            n_x = self._FAKE_GRID_LONG
+            n_y = max(2, round(self._FAKE_GRID_LONG / aspect))
+        else:
+            n_y = self._FAKE_GRID_LONG
+            n_x = max(2, round(self._FAKE_GRID_LONG * aspect))
+
+        self._ray_grid_shape = (n_y, n_x)
+
+        s = self._img_z / self._targ_z
+        x_vals = np.linspace(-self._x_max * s, self._x_max * s, n_x)
+        y_vals = np.linspace(-self._y_max * s, self._y_max * s, n_y)
+        x_grid, y_grid = np.meshgrid(x_vals, y_vals)
+        z_grid = np.full_like(x_grid, self._img_z)
+
+        img_plane = np.stack([x_grid, y_grid, z_grid], axis=-1).reshape(-1, 3)
+        dir3 = img_plane / np.linalg.norm(img_plane, axis=-1, keepdims=True)
+        N = dir3.shape[0]
+
+        self._origins = img_plane.copy()   # rays start at image plane, not the eye
+        self._directions = dir3.copy()
+        self._bounces = []
+
+        cur_origins = self._origins.copy()
+        cur_dirs = dir3.copy()
+        still_active = np.ones(N, dtype=bool)
+
+        for _ in range(self._MAX_BOUNCES):
+            if not np.any(still_active):
+                break
+
+            step_origins = cur_origins.copy()
+            step_dirs = cur_dirs.copy()
+            hit_origins = cur_origins.copy()
+            hit_mirror = np.zeros(N, dtype=bool)
+            hit_target = np.zeros(N, dtype=bool)
+            new_origins = cur_origins.copy()
+            new_dirs = cur_dirs.copy()
+
+            act = np.where(still_active)[0]
+            ao = cur_origins[act]
+            ad = cur_dirs[act]
+
+            m_dists = np.stack(
+                [m.get_dist(ao, ad) for m in self._mirrors], axis=1
+            )   # (len(act), n_mirrors)
+            t_dists = (self._targ_z - ao[:, 2]) / ad[:, 2]
+
+            best_m_idx = np.argmin(m_dists, axis=1)
+            best_m_dist = m_dists[np.arange(len(act)), best_m_idx]
+
+            for local_i, global_i in enumerate(act):
+                td = t_dists[local_i]
+                md = best_m_dist[local_i]
+
+                if td <= md or not np.isfinite(md):
+                    # hits target
+                    hit_target[global_i] = True
+                    new_origins[global_i] = ao[local_i] + ad[local_i] * td
+                    still_active[global_i] = False
+                else:
+                    # hits a mirror
+                    hit_mirror[global_i] = True
+                    m = self._mirrors[best_m_idx[local_i]]
+                    new_origins[global_i] = ao[local_i] + ad[local_i] * md
+                    new_dirs[global_i] = m.reflect(ad[local_i:local_i + 1])[0]
+
+            hit_origins[act] = new_origins[act]
+
+            self._bounces.append({
+                'step_origins': step_origins,
+                'step_dirs':    step_dirs,
+                'hit_origins':  hit_origins,
+                'hit_mirror':   hit_mirror,
+                'hit_target':   hit_target,
+            })
+
+            cur_origins = new_origins.copy()
+            cur_dirs = new_dirs.copy()
+
+    def get_ray_params(self):
+        """
+        Return geometric parameters needed by side_view.
+
+        :returns: dict with keys x_max, y_max, img_z, targ_z, mirrors, ray_grid_shape
+        """
+        return {
+            'x_max':          self._x_max,
+            'y_max':          self._y_max,
+            'img_z':          self._img_z,
+            'targ_z':         self._targ_z,
+            'mirrors':        self._mirrors,
+            'ray_grid_shape': self._ray_grid_shape,
+        }
+
+    def get_initial_rays(self):
+        """
+        Return the initial ray origins and directions.
+
+        :returns: (origins Nx3, directions Nx3), or (None, None) if not configured
+        """
+        return self._origins, self._directions
+
+    def get_bounces(self):
+        """
+        Return the list of per-step bounce dicts.
+
+        Each dict has keys: step_origins, step_dirs, hit_origins, hit_mirror, hit_target.
+        Empty list if no mirrors configured.
+        """
+        return self._bounces
+
+
 if __name__ == "__main__":
     # test_iso_mirrors()
     logging.basicConfig(level=logging.INFO)

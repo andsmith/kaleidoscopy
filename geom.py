@@ -24,7 +24,10 @@ COLORS = {'black': (0, 0, 0),
           'light_blue': (255, 200, 100),
           'neon_green': (57, 255, 20),
           'magenta': (255, 0, 255),
-          'dark_navy': (33, 0, 0)}
+          'dark_navy': (33, 0, 0),
+          'off-white': (245, 245, 245),}
+
+BKG = COLORS['dark_navy']
 
 def rotate_2d(points, angle_rad):
     """

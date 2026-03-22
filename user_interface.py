@@ -75,7 +75,7 @@ SELECTED_COLOR = COLORS['neon_green']
 class UILayer(object):
     def __init__(self, app, window_name=None):
         self.app = app
-        self.mode = UIModes.MENU
+        self.mode = UIModes.INACTIVE
         self._custom_mirrors = None
         self.selected_menu_idx = 0
         self._option_names = PresetFactory.PRESET_NAMES + ["CUSTOM"]
