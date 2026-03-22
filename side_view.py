@@ -51,6 +51,7 @@ EYE_COLOR = COLORS['light_blue']
 
 # Layout
 MARGIN_PX = 12
+VERT_SPLIT_REL = 0.5
 
 # Colors
 FOV_LINE_COLOR   = COLORS['gray']
@@ -61,10 +62,11 @@ MIRROR_DARK_ALPHA  = 0.85
 
 # Ray drawing
 DOT_RADIUS           = 3
-VECTOR_STEP          = 0.06   # natural-coord length for direction arrows
+VECTOR_STEP          = 0.06   # natural-coord length for direction arrows (deprecated in favor of UNIT_VEC_LEN_PX)
+UNIT_VEC_LEN_PX      = 30     # fixed pixel length for direction arrows, independent of zoom
 N_RAYS_DEFAULT       = 10
-ARROW_TIP_RATIO      = 0.5    # arrowhead length as fraction of shaft length
-ARROW_TIP_ANGLE_DEG  = 45.0   # full opening angle of arrowhead barbs
+ARROW_TIP_RATIO      = 0.25    # arrowhead length as fraction of shaft length
+ARROW_TIP_ANGLE_DEG  = 30.0   # full opening angle of arrowhead barbs
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +76,7 @@ ARROW_TIP_ANGLE_DEG  = 45.0   # full opening angle of arrowhead barbs
 def _compute_panels(img_w, img_h, margin):
     """Return {name: {'x0','y0','x1','y1'}} bounding boxes for each panel."""
     mx = img_w // 2
-    my = img_h // 3
+    my = int(img_h * VERT_SPLIT_REL)
     return {
         'text':    {'x0': margin,      'y0': margin,      'x1': mx - margin,      'y1': my - margin},
         'topdown': {'x0': mx + margin, 'y0': margin,      'x1': img_w - margin,   'y1': my - margin},
@@ -250,6 +252,12 @@ class SideViewState:
         # Set by render_side_view so the mouse callback has current geometry
         self._last_panels     = None
         self._last_transforms = None
+        # Drag-to-pan state
+        self._drag_panel      = None   # panel key being dragged
+        self._drag_start_px   = None   # (x, y) pixel where drag began
+        self._drag_tf         = None   # PanelTransform snapshot at drag start
+        self._drag_orig_cx    = None   # zoom.center_x at drag start
+        self._drag_orig_cy    = None   # zoom.center_y at drag start
 
     def reset_zoom(self, panel_key=None):
         """Reset zoom for one panel (or all if panel_key is None)."""
@@ -264,29 +272,62 @@ class SideViewState:
 
     def mouse_callback(self, event, x, y, flags, param):
         """cv2 mouse callback.  Register with ``cv2.setMouseCallback``."""
-        if event != cv2.EVENT_MOUSEWHEEL or self._last_panels is None:
+        if self._last_panels is None:
             return
-        for key in ('topdown', 'xz', 'yz'):
-            r = self._last_panels[key]
-            if r['x0'] <= x < r['x1'] and r['y0'] <= y < r['y1']:
-                tf = self._last_transforms.get(key)
-                if tf is None:
-                    return
-                nat_x, nat_y = tf.from_px(x, y)
-                zoom = self._zooms[key]
-                factor = (ZoomState.ZOOM_FACTOR if flags > 0
-                          else 1.0 / ZoomState.ZOOM_FACTOR)
-                old_scale = zoom.scale
-                new_scale = float(np.clip(old_scale * factor,
-                                         ZoomState.MIN_SCALE, ZoomState.MAX_SCALE))
-                # Effective center before this scroll
-                cx = zoom.center_x if zoom.center_x is not None else tf._def_cx
-                cy = zoom.center_y if zoom.center_y is not None else tf._def_cy
-                # Keep the natural-coord point under the mouse fixed
-                zoom.center_x = nat_x - (nat_x - cx) * old_scale / new_scale
-                zoom.center_y = nat_y - (nat_y - cy) * old_scale / new_scale
-                zoom.scale    = new_scale
-                break
+
+        if event == cv2.EVENT_MOUSEWHEEL:
+            for key in ('topdown', 'xz', 'yz'):
+                r = self._last_panels[key]
+                if r['x0'] <= x < r['x1'] and r['y0'] <= y < r['y1']:
+                    tf = self._last_transforms.get(key)
+                    if tf is None:
+                        return
+                    nat_x, nat_y = tf.from_px(x, y)
+                    zoom = self._zooms[key]
+                    factor = (ZoomState.ZOOM_FACTOR if flags > 0
+                              else 1.0 / ZoomState.ZOOM_FACTOR)
+                    old_scale = zoom.scale
+                    new_scale = float(np.clip(old_scale * factor,
+                                             ZoomState.MIN_SCALE, ZoomState.MAX_SCALE))
+                    cx = zoom.center_x if zoom.center_x is not None else tf._def_cx
+                    cy = zoom.center_y if zoom.center_y is not None else tf._def_cy
+                    zoom.center_x = nat_x - (nat_x - cx) * old_scale / new_scale
+                    zoom.center_y = nat_y - (nat_y - cy) * old_scale / new_scale
+                    zoom.scale    = new_scale
+                    break
+
+        elif event == cv2.EVENT_LBUTTONDOWN:
+            for key in ('topdown', 'xz', 'yz'):
+                r = self._last_panels[key]
+                if r['x0'] <= x < r['x1'] and r['y0'] <= y < r['y1']:
+                    tf = self._last_transforms.get(key)
+                    if tf is None:
+                        return
+                    zoom = self._zooms[key]
+                    self._drag_panel    = key
+                    self._drag_start_px = (x, y)
+                    self._drag_tf       = tf
+                    self._drag_orig_cx  = zoom.center_x if zoom.center_x is not None else tf._def_cx
+                    self._drag_orig_cy  = zoom.center_y if zoom.center_y is not None else tf._def_cy
+                    break
+
+        elif event == cv2.EVENT_MOUSEMOVE and (flags & cv2.EVENT_FLAG_LBUTTON):
+            if self._drag_panel is None:
+                return
+            tf   = self._drag_tf
+            zoom = self._zooms[self._drag_panel]
+            # Compute the natural-coord delta by inverting the start transform
+            nat_start = tf.from_px(*self._drag_start_px)
+            nat_curr  = tf.from_px(x, y)
+            zoom.center_x = self._drag_orig_cx + (nat_start[0] - nat_curr[0])
+            zoom.center_y = self._drag_orig_cy + (nat_start[1] - nat_curr[1])
+
+        elif event == cv2.EVENT_LBUTTONUP:
+            self._drag_panel    = None
+            self._drag_start_px = None
+            self._drag_tf       = None
+            self._drag_orig_cx  = None
+            self._drag_orig_cy  = None
 
 
 def _build_transforms(params, panels, pad=0.12, zooms=None):
@@ -342,6 +383,42 @@ def _draw_dotted_line(img, pt1, pt2, color, dash=6, gap=4, thickness=1, clip_tf=
         else:
             t += gap
         drawing = not drawing
+
+
+def _arrow_endpoint_px_fixed_len(origin_3d, direction_3d, axes, tf, len_px):
+    """Compute arrow endpoint for fixed pixel length, independent of zoom.
+    
+    Projects the 3D direction to 2D screen space, normalizes it, and scales to len_px pixels.
+    This ensures direction arrows remain the same visual size when zoomed.
+    
+    :param origin_3d: 3D origin point
+    :param direction_3d: 3D direction vector
+    :param axes: projection axes ('xy', 'xz', or 'yz')
+    :param tf: PanelTransform for the panel
+    :param len_px: desired arrow length in pixels
+    :return: (x, y) endpoint in pixel coordinates
+    """
+    o_px = tf.to_px(*_project(origin_3d, axes))
+    
+    # Compute screen-space direction by projecting two points along the ray.
+    # Use a large probe distance (1.0) for numerical stability, especially when zoomed out.
+    # The exact distance doesn't matter—we normalize by it anyway.
+    probe_pt = origin_3d + direction_3d * 1.0
+    probe_px = tf.to_px(*_project(probe_pt, axes))
+    
+    # Get direction in pixel space
+    dx = float(probe_px[0] - o_px[0])
+    dy = float(probe_px[1] - o_px[1])
+    dist = np.hypot(dx, dy)
+    
+    if dist < 1e-6:
+        # Direction is essentially zero in screen space, return origin
+        return o_px
+    
+    # Normalize and scale to fixed pixel length
+    scale = len_px / dist
+    end_px = (int(o_px[0] + dx * scale), int(o_px[1] + dy * scale))
+    return end_px
 
 
 def _draw_arrow(img, pt1, pt2, color, thickness=1,
@@ -541,72 +618,95 @@ def _project(pt3, axes):
 _PANEL_AXES = {'topdown': 'xy', 'xz': 'xz', 'yz': 'yz'}
 
 
-def _draw_rays(img, mode, subset_inds, origins, bounces, transforms):
+def _draw_rays(img, mode, subset_inds, origins, init_dirs, bounces, transforms):
     """Draw the ray subset in all three panels according to the given mode.
 
-    All primitives are clipped / hidden when outside the panel bounds so that
-    zoomed views never spill into adjacent panels or the margin.
-    """
-    if not bounces:
-        return
+    Modes:
+      'start'  – dot + arrow at each ray's current position/direction.
+                 Uses the last bounce's step_origins/step_dirs, or the
+                 initial rays when no bounces exist yet.
+      'hit'    – segment from step_origins → hit_origins for the latest
+                 bounce, with endpoint dots.  Nothing drawn if no bounces.
+      'bounce' – like 'hit' plus a direction arrow at hit_origins showing
+                 each mirror-hit ray's post-bounce direction (hit_dirs).
+      'trails' – all bounce segments faintly; last bounce segment bright.
 
+    All primitives are clipped so zoomed views never spill into adjacent panels.
+    """
     for panel_name, axes in _PANEL_AXES.items():
         tf = transforms[panel_name]
 
         for idx in subset_inds:
-            o = origins[idx]
 
             if mode == 'start':
-                o_px = tf.to_px(*_project(o, axes))
+                if bounces:
+                    cur_o = bounces[-1]['step_origins'][idx]
+                    cur_d = bounces[-1]['step_dirs'][idx]
+                else:
+                    cur_o = origins[idx]
+                    cur_d = init_dirs[idx]
+                o_px = tf.to_px(*_project(cur_o, axes))
                 if tf.in_panel(*o_px):
                     cv2.circle(img, o_px, DOT_RADIUS - 1, EYE_COLOR, -1, cv2.LINE_AA)
-                if bounces:
-                    d = bounces[0]['step_dirs'][idx]
-                    end3 = o + d * VECTOR_STEP
-                    e_px = tf.to_px(*_project(end3, axes))
-                    _draw_arrow(img, o_px, e_px, COLORS['cyan'], 1, clip_tf=tf)
+                e_px = _arrow_endpoint_px_fixed_len(cur_o, cur_d, axes, tf, UNIT_VEC_LEN_PX)
+                _draw_arrow(img, o_px, e_px, COLORS['cyan'], 1, clip_tf=tf)
 
             elif mode == 'hit':
-                if bounces:
-                    step = bounces[0]
-                    o_px = tf.to_px(*_project(step['step_origins'][idx], axes))
-                    h_px = tf.to_px(*_project(step['hit_origins'][idx], axes))
-                    if tf.in_panel(*o_px):
-                        cv2.circle(img, o_px, DOT_RADIUS, COLORS['red'], -1, cv2.LINE_AA)
-                    seg = tf.clip_line(o_px, h_px)
-                    if seg:
-                        cv2.line(img, seg[0], seg[1], COLORS['gray'], 1, cv2.LINE_AA)
-                    if tf.in_panel(*h_px):
-                        cv2.circle(img, h_px, DOT_RADIUS, COLORS['green'], -1, cv2.LINE_AA)
+                if not bounces:
+                    continue
+                step = bounces[-1]
+                o_px = tf.to_px(*_project(step['step_origins'][idx], axes))
+                h_px = tf.to_px(*_project(step['hit_origins'][idx], axes))
+                if tf.in_panel(*o_px):
+                    cv2.circle(img, o_px, DOT_RADIUS, COLORS['red'], -1, cv2.LINE_AA)
+                seg = tf.clip_line(o_px, h_px)
+                if seg:
+                    cv2.line(img, seg[0], seg[1], COLORS['gray'], 1, cv2.LINE_AA)
+                if tf.in_panel(*h_px):
+                    color = COLORS['blue'] if step['hit_mirror'][idx] else COLORS['green']
+                    r = DOT_RADIUS + 2 if step['hit_target'][idx] else DOT_RADIUS
+                    cv2.circle(img, h_px, r, color, -1, cv2.LINE_AA)
 
             elif mode == 'bounce':
-                prev_px = tf.to_px(*_project(o, axes))
-                if tf.in_panel(*prev_px):
-                    cv2.circle(img, prev_px, DOT_RADIUS - 1, EYE_COLOR, -1, cv2.LINE_AA)
+                if not bounces:
+                    continue
+                step = bounces[-1]
+                o_px = tf.to_px(*_project(step['step_origins'][idx], axes))
+                h_px = tf.to_px(*_project(step['hit_origins'][idx], axes))
+                if tf.in_panel(*o_px):
+                    cv2.circle(img, o_px, DOT_RADIUS, COLORS['red'], -1, cv2.LINE_AA)
+                seg = tf.clip_line(o_px, h_px)
+                
+                if seg:
+                    cv2.line(img, seg[0], seg[1], COLORS['gray'], 1, cv2.LINE_AA)
+                if step['hit_mirror'][idx]:
+                    if tf.in_panel(*h_px):
+                        cv2.circle(img, h_px, DOT_RADIUS, COLORS['blue'], -1, cv2.LINE_AA)
+                    hit_d = step['hit_dirs'][idx]
+                    e_px = _arrow_endpoint_px_fixed_len(step['hit_origins'][idx], hit_d, axes, tf, UNIT_VEC_LEN_PX)
+                    _draw_arrow(img, h_px, e_px, COLORS['cyan'], 1, clip_tf=tf)
+                elif step['hit_target'][idx]:
+                    if tf.in_panel(*h_px):
+                        cv2.circle(img, h_px, DOT_RADIUS + 2, COLORS['green'], -1, cv2.LINE_AA)
 
+            elif mode == 'trails':
+                if not bounces:
+                    continue
                 for k, step in enumerate(bounces):
-                    so = step['step_origins'][idx]
-                    ho = step['hit_origins'][idx]
-                    so_px = tf.to_px(*_project(so, axes))
-                    ho_px = tf.to_px(*_project(ho, axes))
-
+                    is_last = (k == len(bounces) - 1)
+                    alpha     = 0.75 if is_last else 0.20
+                    thickness = 2    if is_last else 1
+                    color = tuple(int(c * alpha) for c in COLORS['orange'])
+                    so_px = tf.to_px(*_project(step['step_origins'][idx], axes))
+                    ho_px = tf.to_px(*_project(step['hit_origins'][idx], axes))
                     seg = tf.clip_line(so_px, ho_px)
                     if seg:
-                        cv2.line(img, seg[0], seg[1], COLORS['orange'], 1, cv2.LINE_AA)
-
-                    if step['hit_mirror'][idx]:
-                        if tf.in_panel(*ho_px):
+                        cv2.line(img, seg[0], seg[1], color, thickness, cv2.LINE_AA)
+                    if is_last:
+                        if step['hit_mirror'][idx] and tf.in_panel(*ho_px):
                             cv2.circle(img, ho_px, DOT_RADIUS, COLORS['green'], -1, cv2.LINE_AA)
-                        if k + 1 < len(bounces):
-                            d_next = bounces[k + 1]['step_dirs'][idx]
-                            end3 = ho + d_next * VECTOR_STEP
-                            e_px = tf.to_px(*_project(end3, axes))
-                            _draw_arrow(img, ho_px, e_px, COLORS['cyan'], 1, clip_tf=tf)
-
-                    if step['hit_target'][idx]:
-                        if tf.in_panel(*ho_px):
+                        elif step['hit_target'][idx] and tf.in_panel(*ho_px):
                             cv2.circle(img, ho_px, DOT_RADIUS + 2, COLORS['red'], -1, cv2.LINE_AA)
-                        break
 
 
 # ---------------------------------------------------------------------------
@@ -648,6 +748,58 @@ def _draw_text_panel(img, panel, params, mode, n_rays, t_elapsed=None):
 
 
 # ---------------------------------------------------------------------------
+# Bounce map panel
+# ---------------------------------------------------------------------------
+
+def _draw_bounce_map(img, panel, bounce_count):
+    """
+    Render the bounce-count heatmap into `panel` (the top-left area).
+
+    bounce_count[y, x] == -1  →  medium gray  (ray still active / not yet resolved)
+    bounce_count[y, x] >= 0   →  viridis color scaled to [0, max_bounces]
+                                  (0 bounces = darkest purple; max = bright yellow)
+    bounce_count is None       →  uniform dark background with a label
+    """
+    px0, py0 = panel['x0'], panel['y0']
+    px1, py1 = panel['x1'], panel['y1']
+    pw, ph = px1 - px0, py1 - py0
+    if pw <= 0 or ph <= 0:
+        return
+
+    cv2.rectangle(img, (px0, py0), (px1, py1), BKG, -1)
+
+    if bounce_count is None:
+        _draw_panel_label(img, panel, "bounce map  (N/A)")
+        return
+
+    valid = bounce_count >= 0
+    if not np.any(valid):
+        _draw_panel_label(img, panel, "bounce map  (pending...)")
+        return
+
+    max_b = int(bounce_count[valid].max())
+
+    # Normalise to uint8: 0 bounces → 0 (dark/purple), max_b → 255 (bright/yellow)
+    if max_b == 0:
+        norm = np.zeros(bounce_count.shape, dtype=np.uint8)
+    else:
+        norm = np.clip(bounce_count.astype(np.float32) / max_b * 255,
+                       0, 255).astype(np.uint8)
+
+    # Apply viridis colormap (outputs BGR)
+    colored = cv2.applyColorMap(norm, cv2.COLORMAP_VIRIDIS)
+
+    # Override still-active pixels with a neutral gray
+    colored[~valid] = (100, 100, 100)
+
+    # Resize to fill the panel (nearest-neighbour keeps discrete color bands crisp)
+    panel_img = cv2.resize(colored, (pw, ph), interpolation=cv2.INTER_NEAREST)
+    img[py0:py1, px0:px1] = panel_img
+
+    _draw_panel_label(img, panel, f"bounce map  (max={max_b})")
+
+
+# ---------------------------------------------------------------------------
 # Panel labels
 # ---------------------------------------------------------------------------
 
@@ -665,13 +817,13 @@ def render_side_view(raytracer, img_size, state=None, mode='bounce', n_rays=N_RA
     """
     Render the 4-panel side-view debug image.
 
-    :param raytracer: FakeRaytracer instance (must support get_ray_params,
-                      get_initial_rays, get_bounces)
+    :param raytracer: object supporting get_ray_params, get_initial_rays,
+                      get_bounces, and get_map
     :param img_size:  (width, height) of the output debug image
     :param state:     SideViewState (optional).  When provided, ``mode`` and
                       ``n_rays`` are taken from the state, and zoom + last-render
                       geometry are stored in it for the mouse callback.
-    :param mode:      'start', 'hit', or 'bounce'  (ignored when state is given)
+    :param mode:      'start', 'hit', 'bounce', or 'trails'  (ignored when state is given)
     :param n_rays:    rays along longer grid dimension (ignored when state is given)
     :returns: (h, w, 3) uint8 numpy array
     """
@@ -691,7 +843,7 @@ def render_side_view(raytracer, img_size, state=None, mode='bounce', n_rays=N_RA
         cv2.rectangle(img, (r['x0'], r['y0']), (r['x1'], r['y1']), BKG, -1)
 
     params  = raytracer.get_ray_params()
-    origins, _ = raytracer.get_initial_rays()
+    origins, init_dirs = raytracer.get_initial_rays()
     bounces = raytracer.get_bounces()
 
     t_elapsed = None
@@ -721,14 +873,18 @@ def render_side_view(raytracer, img_size, state=None, mode='bounce', n_rays=N_RA
 
         if params['ray_grid_shape']:
             subset = select_ray_subset(params['ray_grid_shape'], n_rays)
-            _draw_rays(img, mode, subset, origins, bounces, tfs)
+            display_mask = params.get('display_mask')
+            if display_mask is not None:
+                subset = subset[display_mask[subset]]
+            _draw_rays(img, mode, subset, origins, init_dirs, bounces, tfs)
 
         t_elapsed = time.time() - t0
 
     for label, key in [('XY top-down', 'topdown'), ('XZ side', 'xz'), ('YZ side', 'yz')]:
         _draw_panel_label(img, panels[key], label)
 
-    _draw_text_panel(img, panels['text'], params, mode, n_rays, t_elapsed)
+    _, bounce_count = raytracer.get_map()
+    _draw_bounce_map(img, panels['text'], bounce_count)
 
     return img
 
@@ -759,7 +915,7 @@ if __name__ == "__main__":
                        x_max=x_max, y_max=y_max, img_z=img_z, targ_z=TARG_Z)
 
     state  = SideViewState(mode='bounce')
-    window = "side_view  [b/h/s=mode  r=reset zoom  scroll=zoom  q=quit]"
+    window = "side_view  [b/h/s/t=mode  r=reset zoom  scroll=zoom  q=quit]"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window, *OUT_SIZE)
     cv2.setMouseCallback(window, state.mouse_callback)
@@ -777,6 +933,8 @@ if __name__ == "__main__":
             state.mode = 'hit'
         elif k == ord('s'):
             state.mode = 'start'
+        elif k == ord('t'):
+            state.mode = 'trails'
         elif k == ord('r'):
             state.reset_zoom()
 

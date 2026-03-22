@@ -11,8 +11,10 @@ Input source:
 
 """
 
-from raytracing import FakeRaytracer
+from raytracing import FakeRaytracer, Raytracer
 from remap_img import remap
+from init_rays import compute_fov, find_img_z
+from side_view import SideViewState, render_side_view
 import numpy as np
 import cv2
 import logging
@@ -22,6 +24,7 @@ from geom import TARG_Z, COLORS, BKG
 from user_interface import UIModes, UILayer
 
 WINDOW_NAME = "Kaleidoscopy!"
+SIDE_VIEW_WINDOW = "Kaleidoscopy - Side View  [ENTER=step  b/h/s/t=mode  r=reset zoom  scroll=zoom  d=close]"
 
 
 class ScopeApp(object):
@@ -41,7 +44,13 @@ class ScopeApp(object):
 
         self._init_input()
         self._fake_raytracer = FakeRaytracer(output_size)
+        self._raytracer = None
+        self._raytrace_done = True
         self._init_ui()
+
+        self._side_view_open = False
+        self._side_view_state = SideViewState(mode='bounce')
+        self._side_view_size = output_size
 
     @property
     def mirrors(self):
@@ -53,7 +62,29 @@ class ScopeApp(object):
     def set_mirrors_and_restart(self, new_mirrors):
         logging.info("Setting mirrors: %s", new_mirrors)
         self._mirrors = new_mirrors
-        # TODO: start real raytracer here
+
+        w_out, h_out = self.out_size
+        x_max, y_max = compute_fov(w_out, h_out)
+        try:
+            img_z = find_img_z(w_out, h_out, new_mirrors.mirrors, x_max, y_max)
+        except ValueError as e:
+            logging.error("Could not compute img_z: %s", e)
+            return
+
+        # Recreate FakeRaytracer with geometry so side_view shows real ray paths
+        self._fake_raytracer = FakeRaytracer(
+            self.out_size, mirrors=new_mirrors.mirrors,
+            x_max=x_max, y_max=y_max, img_z=img_z, targ_z=TARG_Z,
+        )
+
+        # Start real raytracer in step-capable mode. We drive stepping from
+        # the main UI loop so side-view can pause and advance with SPACE.
+        self._raytracer = Raytracer(
+            self.out_size, new_mirrors.mirrors, TARG_Z, x_max, y_max, img_z, threaded=False
+        )
+        self._raytracer._init_rays()
+        self._raytrace_done = False
+        logging.info("Raytracer initialized. img_z=%.6f, x_max=%.3f, y_max=%.3f", img_z, x_max, y_max)
 
     def _init_ui(self):
         self._ui_layer = UILayer(self, window_name=WINDOW_NAME)
@@ -107,6 +138,62 @@ class ScopeApp(object):
             return None
         return frame
 
+    def _open_side_view(self):
+        cv2.namedWindow(SIDE_VIEW_WINDOW, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(SIDE_VIEW_WINDOW, *self.out_size)
+        cv2.setMouseCallback(SIDE_VIEW_WINDOW, self._side_view_state.mouse_callback)
+        self._side_view_open = True
+        self._side_view_size = self.out_size
+        logging.info("Side view opened: ENTER advances one raytrace step.")
+
+    @staticmethod
+    def _is_enter_key(k):
+        """Return True when the key code corresponds to Enter."""
+        return k in (10, 13)
+
+    def _close_side_view(self):
+        cv2.destroyWindow(SIDE_VIEW_WINDOW)
+        self._side_view_open = False
+
+    def _handle_side_view_key(self, k):
+        if k == ord('b'):
+            self._side_view_state.mode = 'bounce'
+        elif k == ord('h'):
+            self._side_view_state.mode = 'hit'
+        elif k == ord('s'):
+            self._side_view_state.mode = 'start'
+        elif k == ord('t'):
+            self._side_view_state.mode = 'trails'
+        elif k == ord('r'):
+            self._side_view_state.reset_zoom()
+
+    def _tick_side_view(self):
+        rect = cv2.getWindowImageRect(SIDE_VIEW_WINDOW)
+        if rect[2] > 10 and rect[3] > 10:
+            self._side_view_size = (rect[2], rect[3])
+        tracer_for_view = self._raytracer if self._raytracer is not None else self._fake_raytracer
+        sv_img = render_side_view(tracer_for_view, self._side_view_size,
+                                  state=self._side_view_state)
+        cv2.imshow(SIDE_VIEW_WINDOW, sv_img)
+
+    def _advance_raytrace_full_speed(self):
+        """Advance raytracing to completion quickly when side-view is hidden."""
+        if self._raytracer is None or self._raytrace_done:
+            return
+        while not self._raytrace_done:
+            has_more = self._raytracer.step(record_bounces=False)
+            self._raytrace_done = not has_more
+
+    def _step_raytrace_once(self):
+        """Advance one raytracing step (used when side-view is open)."""
+        if self._raytracer is None or self._raytrace_done:
+            logging.info("Raytracing already complete.")
+            return
+        has_more = self._raytracer.step(record_bounces=True)
+        self._raytrace_done = not has_more
+        if self._raytrace_done:
+            logging.info("Raytracing complete.")
+
     def start(self):
         self._running = True
         cv2.namedWindow(WINDOW_NAME)
@@ -118,8 +205,17 @@ class ScopeApp(object):
                 continue
 
             if self._mirrors is not None:
-                # Mirrors configured: show fake raytracer placeholder
-                self._frame_out = self._fake_raytracer.render()
+                if self._raytracer is not None and not self._side_view_open:
+                    self._advance_raytrace_full_speed()
+                k_map, bounce_count = self._raytracer.get_map() if self._raytracer else (None, None)
+                if k_map is not None:
+                    # remap requires all arrays same HxW; resize input to out_size
+                    input_resized = cv2.resize(input_frame, self.out_size)
+                    frame_out = np.zeros((self.out_size[1], self.out_size[0], 3), dtype=np.uint8)
+                    remap(input_resized, frame_out, k_map[0], k_map[1])
+                    self._frame_out = frame_out
+                else:
+                    self._frame_out = self._fake_raytracer.render()
             else:
                 # No mirrors yet: show raw input as background
                 self._frame_out = self._make_img_frame(input_frame)
@@ -128,7 +224,26 @@ class ScopeApp(object):
             self._f_no += 1
 
             cv2.imshow(WINDOW_NAME, self._frame_out)
-            k = cv2.waitKey(1)
+
+            if self._side_view_open:
+                self._tick_side_view()
+
+            k = cv2.waitKey(1) & 0xFF
+
+            if k == ord('d'):
+                if self._side_view_open:
+                    self._close_side_view()
+                else:
+                    self._open_side_view()
+
+            if self._side_view_open:
+                if self._is_enter_key(k):
+                    self._step_raytrace_once()
+                self._handle_side_view_key(k)
+
+            if self._side_view_open and self._is_enter_key(k):
+                continue
+
             if not self._ui_layer.handle_keypress(k):
                 break
 

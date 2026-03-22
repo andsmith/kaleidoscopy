@@ -106,7 +106,8 @@ def find_img_z(w_out, h_out, mirrors, x_max, y_max, targ_z=TARG_Z):
     return lo
 
 
-def make_ray_grid(w_out, h_out, img_z, x_max, y_max, targ_z=TARG_Z, start_at_eye=False):
+def make_ray_grid(w_out, h_out, img_z, x_max, y_max, targ_z=TARG_Z, start_at_eye=False,
+                  add_noise=True):
     """
     Create the initial ray grid through the image plane at z=img_z,
     one ray per output pixel.
@@ -126,12 +127,25 @@ def make_ray_grid(w_out, h_out, img_z, x_max, y_max, targ_z=TARG_Z, start_at_eye
     :param targ_z: target plane Z (default TARG_Z)
     :param start_at_eye: if True, origins are all (0,0,0); if False (default),
                          origins are the pixel positions on the image plane
+    :param add_noise: if True (default), apply a single uniform random XY offset
+                      to all grid points.  The offset magnitude is drawn independently
+                      for X and Y from Uniform[-spacing/100, +spacing/100], where
+                      spacing is the grid point separation in that dimension.  This
+                      prevents rays from hitting mirror-mirror corners simultaneously
+                      (a degenerate case for centred rectangular mirror tubes).
     :returns: (origins, directions) -- each shape (w_out*h_out, 3), float64
         directions: unit vectors from eye through each pixel (same either way)
     """
     s = img_z / targ_z
     x_vals = np.linspace(-x_max * s, x_max * s, w_out)
     y_vals = np.linspace(-y_max * s, y_max * s, h_out)
+
+    if add_noise:
+        dx_spacing = 2 * x_max * s / max(w_out - 1, 1)
+        dy_spacing = 2 * y_max * s / max(h_out - 1, 1)
+        x_vals = x_vals + np.random.uniform(-dx_spacing / 100, dx_spacing / 100)
+        y_vals = y_vals + np.random.uniform(-dy_spacing / 100, dy_spacing / 100)
+
     x_grid, y_grid = np.meshgrid(x_vals, y_vals)  # shape (h, w)
     z_grid = np.full_like(x_grid, img_z)
 

@@ -75,7 +75,7 @@ SELECTED_COLOR = COLORS['neon_green']
 class UILayer(object):
     def __init__(self, app, window_name=None):
         self.app = app
-        self.mode = UIModes.INACTIVE
+        self.mode = UIModes.MENU
         self._custom_mirrors = None
         self.selected_menu_idx = 0
         self._option_names = PresetFactory.PRESET_NAMES + ["CUSTOM"]
@@ -123,7 +123,7 @@ class UILayer(object):
     def _get_selected_preset(self):
         if self.selected_menu_idx >= len(self._option_names) - 1:
             raise ValueError("Selected menu index is out of range for presets.")
-        return PresetFactory.make_preset(self._option_names[self.selected_menu_idx])
+        return PresetFactory.make_preset(self._option_names[self.selected_menu_idx], r=self._icon_radius)
 
     def handle_keypress(self, key):
         
