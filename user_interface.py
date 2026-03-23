@@ -78,34 +78,37 @@ TITLE_MAX_FONT_SCALE = 1.75
 TITLE_INDENT_PX = 20
 
 HELP_FONT_SCALES = {'title': 1.25, 'subtitle': .6, 'section': .9, 'text': .7}
+HELP_PADDING = 60
 
 _HELP_SECTIONS = [
     ("hotkeys", [
-        ("h / H",      "show / hide this help"),
-        ("q / ESC",    "quit"),
-        ("f",          "toggle fullscreen"),
-        ("v",          "toggle control-point overlay (live edit)"),
-        ("-  /  =",    "scale mirrors down / up"),
-    ]),
-    ("menu", [
-        ("SPACE",      "open menu / confirm selection"),
-        ("TAB",        "cycle menu options (in menu)"),
-        ("x",          "close menu without resetting raytracer"),
-    ]),
-    ("effects", [
-        ("0",          "reset pan / zoom and disable all effects"),
-        ("1",          "cycle fade effect"),
-        ("2",          "cycle stained-glass effect"),
-        ("w",          "cycle stain threshold"),
-    ]),
-    ("--debug enabled keys", [
-        ("ENTER",      "advance one raytrace step"),
-        ("b",          "toggle bounce / hit draw mode"),
-        ("s",          "start (vector) draw mode"),
-        ("t",          "trails draw mode"),
-        ("r",          "reset zoom"),
-        ("scroll",     "zoom in / out"),
-        ("d",          "close debug window"),
+        ("general", [
+            ("h / H",      "show / hide this help"),
+            ("q / ESC",    "quit"),
+            ("f",          "toggle fullscreen"),
+            ("v",          "toggle control-point overlay (live edit)"),
+            ("-  /  =",    "scale mirrors down / up"),
+        ]),
+        ("menu", [
+            ("SPACE",      "open menu / confirm selection"),
+            ("TAB",        "cycle menu options (in menu)"),
+            ("x",          "close menu without resetting raytracer"),
+        ]),
+        ("effects", [
+            ("0",          "reset pan / zoom and disable all effects"),
+            ("1",          "cycle fade effect"),
+            ("2",          "cycle stained-glass effect"),
+            ("w",          "cycle stain threshold"),
+        ]),
+        ("debug-mode", [
+            ("ENTER",      "advance one raytrace step"),
+            ("b",          "toggle bounce / hit draw mode"),
+            ("s",          "start (vector) draw mode"),
+            ("t",          "trails draw mode"),
+            ("r",          "reset zoom"),
+            ("scroll",     "zoom in / out"),
+            ("d",          "close debug window"),
+        ]),
     ]),
 ]
 
@@ -837,79 +840,320 @@ class UILayer(object):
         color = BKG
         thick = 1
         aa = cv2.LINE_AA
-        tx0 = bx0 + TITLE_INDENT_PX
-        key_x = tx0 + TITLE_INDENT_PX
         title_text = "Kaleidoscopy!"
         subtitle_text = "(2026) github:andsmith/kaleidoscopy"
         tc = HELP_FONT_SCALES['text']
         sc = HELP_FONT_SCALES['section']
 
-        (title_size, _) = cv2.getTextSize(title_text, font, HELP_FONT_SCALES['title'], thick)
-        (subtitle_size, _) = cv2.getTextSize(subtitle_text, font, HELP_FONT_SCALES['subtitle'], thick)
+        title_size, title_bl_val = cv2.getTextSize(title_text, font, HELP_FONT_SCALES['title'], thick)
+        subtitle_size, subtitle_bl_val = cv2.getTextSize(subtitle_text, font, HELP_FONT_SCALES['subtitle'], thick)
+        max_top_w = 0
         max_section_w = 0
         max_key_w = 0
         max_desc_w = 0
-        for section_name, entries in _HELP_SECTIONS:
-            (section_size, _) = cv2.getTextSize(section_name, font, sc, thick)
-            max_section_w = max(max_section_w, section_size[0])
-            for key_str, desc_str in entries:
-                (key_size, _) = cv2.getTextSize(key_str, font, tc, thick)
-                (desc_size, _) = cv2.getTextSize(desc_str, font, tc, thick)
-                max_key_w = max(max_key_w, key_size[0])
-                max_desc_w = max(max_desc_w, desc_size[0])
+        for top_name, sub_sections in _HELP_SECTIONS:
+            (top_size, _) = cv2.getTextSize(top_name, font, sc, thick)
+            max_top_w = max(max_top_w, top_size[0])
+            for section_name, entries in sub_sections:
+                (section_size, _) = cv2.getTextSize(section_name, font, sc, thick)
+                max_section_w = max(max_section_w, section_size[0])
+                for key_str, desc_str in entries:
+                    (key_size, _) = cv2.getTextSize(key_str, font, tc, thick)
+                    (desc_size, _) = cv2.getTextSize(desc_str, font, tc, thick)
+                    max_key_w = max(max_key_w, key_size[0])
+                    max_desc_w = max(max_desc_w, desc_size[0])
 
-        desc_x = key_x + max_key_w + TITLE_INDENT_PX
-        left_text_right = max(
-            tx0 + title_size[0],
-            tx0 + subtitle_size[0],
-            tx0 + max_section_w,
-            key_x + max_key_w,
-            desc_x + max_desc_w,
+        # Left side natural width (relative to tx0; title/subtitle are globally centered)
+        left_natural_w = max(
+            max_top_w,
+            max_section_w,
+            TITLE_INDENT_PX + max_key_w,
+            TITLE_INDENT_PX + max_key_w + TITLE_INDENT_PX + max_desc_w,
         )
-        divider_x = min(bx1 - TITLE_INDENT_PX, left_text_right + TITLE_INDENT_PX)
-        left_inner_x1 = divider_x - TITLE_INDENT_PX
-        y = by0 + TITLE_INDENT_PX
 
-        def _put_centered(text, scale, gap_after=4):
+        # Estimate content_top_y (after header) for right-side vertical sizing
+        panel_w = bx1 - bx0
+        content_top_y_est = (by0 + TITLE_INDENT_PX
+                             + title_size[1] + title_bl_val + 6
+                             + subtitle_size[1] + subtitle_bl_val + HELP_PADDING)
+        avail_h_est = max(1, by1 - TITLE_INDENT_PX - content_top_y_est)
+        fig_h = max(20, int(avail_h_est * 0.15))
+        icon_size_r = min(42, max(22, int(fig_h * 0.7)))
+        fig_w = int(panel_w * 0.24)   # ~2/3 of previous sizing (~0.36 * panel_w)
+
+        # Measure right-side content widths for horizontal layout
+        _right_sec_strs = [
+            "Mouse position sets primary/secondary control points",
+            "All control points selected",
+            "Crosshairs (optical axis) must be inside mirrors",
+        ]
+        _right_item_strs = [
+            "Drag the primary point",
+            "Middle click: add point between primary & secondary",
+            "Right click: remove primary point",
+            "Drag from inside shape: translate figure",
+            "Mouse wheel: scale figure up/down",
+        ]
+        _cross_row_strs = ["axis inside, validated!", "axis outside, can't render"]
+        max_rsec_w  = max(cv2.getTextSize(s, font, sc, thick)[0][0] for s in _right_sec_strs)
+        max_ritem_w = (TITLE_INDENT_PX +
+                       max(cv2.getTextSize(s, font, tc, thick)[0][0] for s in _right_item_strs))
+        max_rcross_w = (TITLE_INDENT_PX + icon_size_r + TITLE_INDENT_PX +
+                        max(cv2.getTextSize(s, font, tc, thick)[0][0] for s in _cross_row_strs))
+        right_natural_w = max(fig_w, max_rsec_w, max_ritem_w, max_rcross_w)
+
+        # Distribute extra horizontal space evenly: [pad | left content | pad | right content | pad]
+        total_content_w = left_natural_w + right_natural_w
+        extra_w = panel_w - total_content_w
+        pad_w = max(COL_MARGIN_PX, extra_w // 3)
+        tx0 = bx0 + pad_w
+        section_x = tx0
+        key_x = section_x + TITLE_INDENT_PX
+        desc_x = key_x + max_key_w + TITLE_INDENT_PX
+        rx0 = bx0 + pad_w + left_natural_w + pad_w
+        rx1 = rx0 + right_natural_w
+
+        y = by0 + TITLE_INDENT_PX
+        global_inner_x0 = bx0 + TITLE_INDENT_PX
+        global_inner_x1 = bx1 - TITLE_INDENT_PX
+
+        def _put_centered(text, scale, gap_after=4, x0=None, x1=None):
             nonlocal y
             (tw, th), bl = cv2.getTextSize(text, font, scale, thick)
-            x = tx0 + (left_inner_x1 - tx0 - tw) // 2
+            cx0 = global_inner_x0 if x0 is None else x0
+            cx1 = global_inner_x1 if x1 is None else x1
+            x = cx0 + (cx1 - cx0 - tw) // 2
             cv2.putText(frame, text, (x, y + th), font, scale, color, thick, aa)
             y += th + bl + gap_after
 
         _put_centered(title_text, HELP_FONT_SCALES['title'], gap_after=6)
-        _put_centered(subtitle_text, HELP_FONT_SCALES['subtitle'], gap_after=20)
+        _put_centered(subtitle_text, HELP_FONT_SCALES['subtitle'], gap_after=HELP_PADDING)
+        content_top_y = y
 
         def _section_height(section_name, entries):
             (_, sh), sbl = cv2.getTextSize(section_name, font, sc, thick)
-            height = sh + sbl + 2 + 8
+            height = sh + sbl + 2 + 12
             for key_str, desc_str in entries:
                 (_, kh), kbl = cv2.getTextSize(key_str, font, tc, thick)
                 height += kh + kbl + 4
             return height
 
-        section_heights = [_section_height(section_name, entries) for section_name, entries in _HELP_SECTIONS]
-        available_section_height = max(0, (by1 - TITLE_INDENT_PX) - y)
+        top_name, sub_sections = _HELP_SECTIONS[0]
+        top_size, top_bl = cv2.getTextSize(top_name, font, sc, thick)
+        top_w = top_size[0]
+        top_h = top_size[1]
+        top_x = tx0 + max(0, (left_natural_w - top_w) // 2)
+        cv2.putText(frame, top_name, (top_x, y + top_h), font, sc, color, thick, aa)
+        y += top_h + top_bl + 16
+
+        section_heights = [_section_height(section_name, entries) for section_name, entries in sub_sections]
+        available_section_height = max(0, (by1 - 3 * TITLE_INDENT_PX) - y)
         total_section_height = sum(section_heights)
-        n_section_gaps = max(0, len(_HELP_SECTIONS) - 1)
+        n_section_gaps = max(0, len(sub_sections) - 1)
         extra_gap = 0.0 if n_section_gaps == 0 else max(0.0, (available_section_height - total_section_height) / n_section_gaps)
 
-        for section_idx, (section_name, entries) in enumerate(_HELP_SECTIONS):
+        for section_idx, (section_name, entries) in enumerate(sub_sections):
             section_size, sbl = cv2.getTextSize(section_name, font, sc, thick)
             sw = section_size[0]
             sh = section_size[1]
-            cv2.putText(frame, section_name, (tx0, y + sh), font, sc, color, thick, aa)
+            cv2.putText(frame, section_name, (section_x, y + sh), font, sc, color, thick, aa)
             y += sh + sbl + 2
-            cv2.line(frame, (tx0, y), (tx0 + sw, y), color, 1, aa)
-            y += 8
+            cv2.line(frame, (section_x, y), (section_x + sw, y), color, 1, aa)
+            y += 12
 
             for key_str, desc_str in entries:
                 (_, kh), kbl = cv2.getTextSize(key_str, font, tc, thick)
                 cv2.putText(frame, key_str, (key_x, y + kh), font, tc, color, thick, aa)
                 cv2.putText(frame, desc_str, (desc_x, y + kh), font, tc, color, thick, aa)
                 y += kh + kbl + 4
-            if section_idx < len(_HELP_SECTIONS) - 1:
+            if section_idx < len(sub_sections) - 1:
                 y += int(round(extra_gap))
+
+        # Right-side illustrations: three vertically arranged demo blocks.
+        ry0 = content_top_y
+        ry1 = by1 - 3 * TITLE_INDENT_PX
+        if rx1 > rx0 + 60 and ry1 > ry0 + 140:
+            n_blocks = 3
+
+            # Compute natural height of each block for even vertical gap distribution.
+            def _right_block_nat_h(section_title_s, item_line_list):
+                (_, sh_), sbl_ = cv2.getTextSize(section_title_s, font, sc, thick)
+                h_ = 2 + fig_h + 8 + sh_ + sbl_ + 2 + 8
+                for ln in item_line_list:
+                    (_, th_), bl_ = cv2.getTextSize(ln, font, tc, thick)
+                    h_ += th_ + bl_ + 4
+                return h_
+
+            def _crosshair_nat_h(section_title_s):
+                (_, sh_), sbl_ = cv2.getTextSize(section_title_s, font, sc, thick)
+                (_, trow_h_), trow_bl_ = cv2.getTextSize("x", font, tc, thick)
+                return (2 + sh_ + sbl_ + 2 + 8
+                        + icon_size_r + trow_bl_ + 8
+                        + icon_size_r)
+
+            block_nat_hs = [
+                _right_block_nat_h(
+                    "Mouse position sets primary/secondary control points",
+                    ["Drag the primary point",
+                     "Middle click: add point between primary & secondary",
+                     "Right click: remove primary point"],
+                ),
+                _right_block_nat_h(
+                    "All control points selected",
+                    ["Drag from inside shape: translate figure",
+                     "Mouse wheel: scale figure up/down"],
+                ),
+                _crosshair_nat_h("Crosshairs (optical axis) must be inside mirrors"),
+            ]
+            total_block_h = sum(block_nat_hs)
+            n_vgaps = n_blocks - 1
+            extra_vh = (ry1 - ry0) - total_block_h
+            vgap = max(COL_MARGIN_PX // 2, extra_vh // n_vgaps) if n_vgaps > 0 else 0
+            block_tops = []
+            cur_y = ry0
+            for nat_h in block_nat_hs:
+                block_tops.append(cur_y)
+                cur_y += nat_h + vgap
+            block_bottoms = [bt + nh for bt, nh in zip(block_tops, block_nat_hs)]
+
+            demo_pts = np.array([
+                [-0.70, -0.20],
+                [-0.20, -0.70],
+                [ 0.45, -0.55],
+                [ 0.72,  0.10],
+                [ 0.15,  0.70],
+                [-0.62,  0.48],
+            ], dtype=np.float32)
+
+            def _draw_demo_block(y_top, y_bottom, section_title, item_lines, all_selected=False):
+                # Left-align figure to rx0; fig_w and fig_h from outer scope
+                fx0 = rx0
+                fx1 = fx0 + fig_w
+                fy0 = y_top + 2
+                fy1 = fy0 + fig_h
+
+                # Draw figure area using the same dark background look as the real UI editor.
+                cv2.rectangle(frame, (fx0, fy0), (fx1, fy1), BKG, -1)
+                cv2.rectangle(frame, (fx0, fy0), (fx1, fy1), COLORS['gray'], 1, aa)
+
+                pad = COL_MARGIN_PX
+                ix0 = fx0 + pad
+                ix1 = fx1 - pad
+                iy0 = fy0 + pad
+                iy1 = fy1 - pad
+
+                def _to_px(pt):
+                    px = int(ix0 + (pt[0] + 1.0) * 0.5 * (ix1 - ix0))
+                    py = int(iy1 - (pt[1] + 1.0) * 0.5 * (iy1 - iy0))
+                    return (px, py)
+
+                pts_px = [_to_px(p) for p in demo_pts]
+                n = len(pts_px)
+                for i in range(n):
+                    cv2.line(frame, pts_px[i], pts_px[(i + 1) % n], MIRROR_COLOR, MIRROR_THIC, aa)
+
+                primary_idx = 1
+                secondary_idx = 2
+                for i, p in enumerate(pts_px):
+                    ring = CTRL_COLOR
+                    dot = CTRL_COLOR
+                    ring_th = 1
+                    if all_selected:
+                        ring = SELECTED_COLOR
+                        dot = SELECTED_COLOR
+                        ring_th = 2
+                    else:
+                        if i == primary_idx:
+                            ring = MOUSEOVER_COLOR
+                            dot = MOUSEOVER_COLOR
+                            ring_th = 2
+                        elif i == secondary_idx:
+                            dot = MOUSEOVER_COLOR
+                    cv2.circle(frame, p, CTRL_PT_RAD[0], ring, ring_th, aa)
+                    cv2.circle(frame, p, CTRL_PT_RAD[1], dot, -1, aa)
+
+                text_y = fy1 + 8
+                title_x = fx0
+                title_size, title_bl = cv2.getTextSize(section_title, font, HELP_FONT_SCALES['section'], thick)
+                title_w = title_size[0]
+                title_h = title_size[1]
+                cv2.putText(frame, section_title, (title_x, text_y + title_h), font,
+                            HELP_FONT_SCALES['section'], color, thick, aa)
+                text_y += title_h + title_bl + 2
+                cv2.line(frame, (title_x, text_y), (title_x + title_w, text_y), color, 1, aa)
+                text_y += 8
+
+                item_x = title_x + TITLE_INDENT_PX
+                for line_text in item_lines:
+                    (_, th), bl = cv2.getTextSize(line_text, font, HELP_FONT_SCALES['text'], thick)
+                    cv2.putText(frame, line_text, (item_x, text_y + th), font,
+                                HELP_FONT_SCALES['text'], color, thick, aa)
+                    text_y += th + bl + 4
+
+            def _draw_crosshair_block(y_top, y_bottom):
+                title_x = rx0
+                text_y = y_top + 2
+                section_title = "Crosshairs (optical axis) must be inside mirrors"
+                title_size, title_bl = cv2.getTextSize(section_title, font, HELP_FONT_SCALES['section'], thick)
+                title_w = title_size[0]
+                title_h = title_size[1]
+                cv2.putText(frame, section_title, (title_x, text_y + title_h), font,
+                            HELP_FONT_SCALES['section'], color, thick, aa)
+                text_y += title_h + title_bl + 2
+                cv2.line(frame, (title_x, text_y), (title_x + title_w, text_y), color, 1, aa)
+                text_y += 8
+
+                icon_size = icon_size_r   # precomputed from fig_h
+                row_gap = 8
+
+                def _draw_row(y_row, cross_color, row_text):
+                    ix0 = title_x + TITLE_INDENT_PX
+                    iy0 = y_row
+                    ix1 = ix0 + icon_size
+                    iy1 = iy0 + icon_size
+
+                    cv2.rectangle(frame, (ix0, iy0), (ix1, iy1), BKG, -1)
+                    cv2.rectangle(frame, (ix0, iy0), (ix1, iy1), COLORS['gray'], 1, aa)
+
+                    cx = (ix0 + ix1) // 2
+                    cy = (iy0 + iy1) // 2
+                    arm = max(3, icon_size // 5)
+                    cv2.line(frame, (cx - arm, cy), (cx + arm, cy), cross_color, 1, aa)
+                    cv2.line(frame, (cx, cy - arm), (cx, cy + arm), cross_color, 1, aa)
+
+                    tx = ix1 + TITLE_INDENT_PX
+                    (_, th), bl = cv2.getTextSize(row_text, font, HELP_FONT_SCALES['text'], thick)
+                    cv2.putText(frame, row_text, (tx, iy0 + icon_size // 2 + th // 2), font,
+                                HELP_FONT_SCALES['text'], color, thick, aa)
+                    return iy1 + bl
+
+                y_row1 = text_y
+                y_after1 = _draw_row(y_row1, COLORS['white'], "axis inside, validated!")
+                y_row2 = y_after1 + row_gap
+                _draw_row(y_row2, COLORS['red'], "axis outside, can't render")
+
+            _draw_demo_block(
+                block_tops[0],
+                block_bottoms[0],
+                section_title="Mouse position sets primary/secondary control points",
+                item_lines=[
+                    "Drag the primary point",
+                    "Middle click: add point between primary & secondary",
+                    "Right click: remove primary point",
+                ],
+                all_selected=False,
+            )
+            _draw_demo_block(
+                block_tops[1],
+                block_bottoms[1],
+                section_title="All control points selected",
+                item_lines=[
+                    "Drag from inside shape: translate figure",
+                    "Mouse wheel: scale figure up/down",
+                ],
+                all_selected=True,
+            )
+            _draw_crosshair_block(block_tops[2], block_bottoms[2])
 
 
 def test_ui_layer():

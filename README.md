@@ -1,13 +1,6 @@
 # kaleidoscopy - (n) the use of a kaleidoscope
 
 
-Run: `> python scope.py` to start the app with the webcam. 
-
-Run: 
-
-
-
-
 (cf. *microscopy*, *spectroscopy*, etc.)
 
 Define a kaleidoscope as 2-valued function of 2 variables K(i,j), mapping screen coordinates (i.e. pixel locations) to their origin in the source image, assuming they bounced around in a kaleidoscope with a given geometry.  If that sounds like raytracing, it is, but the key insight for this project is we only need to compute this once, in the beginning. To display any arbitrary image or video through the kaleidoscope just takes look-ups.  Kaleidoscopy works in these 2 parts:
@@ -17,6 +10,67 @@ Define a kaleidoscope as 2-valued function of 2 variables K(i,j), mapping screen
    * the bounce map B(i,j) = n, where the output pixel at location i, n bounced off n mirrors before reaching the image plane.
  * **mapping** (viewing):  Using a numpy c extension (remap_img.c) this is straightforward:
    * Given the kaleidscope and bounce maps and an input image, compute the output image with simple look-ups.
+
+This means it can run live on a webcam:
+
+![Webcam mode example](assets/cam_mode.jpg)
+
+Run: `> python scope.py` to start the app with the webcam, or `> python scope.py <input_image>` to start the app with a specific input image.  Run with `--help` for to see options for input/output resolution.  
+
+
+[![ `python scope.py images/peppers.jpg`](assets/image_mode.jpg)](assets/image_mode.jpg)
+
+## The Menu .
+
+
+First, select an option for mirror geometry and user interaction mode:
+* The *preset shapes* are:
+  * **Equilateral Triangle**
+  * **Acute Isoceles Triangle**
+  * **Obtuse Isoceles Triangle**
+  * **Square**
+  * **Hexagon**
+  * **5-pointed Star**
+* The other shapes can be selected with:
+  * **Custom mode**:  First edit the mirror geometry (move/add/delete vertices of a polygon), then render.
+  * **Live-editing mode**:  The mirror placement is outlined on the rendered image, can be moved (restarts raytracer) while mapping continues.
+
+[![Menu screen](assets/menu.jpg)](assets/menu.jpg)
+
+The menu is shown on start-up, or can be accessed by pressing `SPACE` at any time: 
+* Pressing `SPACE` again will accept the menu selection (alternatively, click on an option).
+* Mouse-wheel motion while moused over an option will change its size, adjust this before confirming with the second `SPACE` press.  Confirmation switches off the menu and starts raytracing/rendering.
+
+## The Kaleidoscope:
+
+(as shown in the first two figures above)
+
+**Dragging** the image anywhere pans, **mouse-wheel zooms** in and out, and pressing `r` resets the view.  The output image is rendered in real-time as you interact, and the raytracing is restarted whenever the mirror geometry changes (e.g. when dragging a mirror in live-editing mode, or when changing presets with the menu). 
+
+
+### Artistic effects (kaleidoscope mode):
+
+#### Reflections decay light intensity:
+Real mirrors decay light intensity with each bounce, so the more times a ray bounces off a mirror before hitting the target plane, the dimmer it should be.  This is implemented as a simple decay factor applied to the output color based on the bounce count n recorded in the B map.  The decay factor is defined as decay_rate^n, where decay_rate is a value between 0 and 1 that determines how quickly reflections fade.  A decay_rate of 1 means no decay (perfect mirrors), while a decay_rate of 0 means complete decay (only the first reflection is visible).  The default decay_rate is 0.99, which means each reflection retains 99% of its intensity.
+
+Hit hotkey '1' to cycle through the following reflection decay rates:   [1.0, 0.99, 0.95, 0.90, 0.75, 0.50]
+#### Stained Glass Window effect:
+
+We can detect boundaries between regions of the output image using two sources:
+* The bounce map B(i,j) = n, where neighboring pixels with different bounce counts indicate a boundary between regions that bounced differently.
+* The kaleidoscope map K(i,j) = (x,y), where neighboring pixels with large differences in their original (x,y) coordinates indicate a boundary between regions that came from different parts of the input image.
+
+Hit hotkey '2' to cycle through different border thicknesses in the rendering.
+
+### Hotkeys & mouse help:
+
+Hit 'h' at any time to see/dismiss the help display:
+
+[![Hotkey help](assets/help.jpg)](assets/hotkey_help.jpg)
+
+
+
+# Technical & implementation notes:
 
 ## Geometry
 
