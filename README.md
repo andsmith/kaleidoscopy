@@ -20,7 +20,10 @@ Run: `> python scope.py` to start the app with the webcam, or `> python scope.py
 
 [![ `python scope.py images/peppers.jpg`](assets/image_mode.jpg)](assets/image_mode.jpg)
 
-## The Menu .
+**Dragging** the image anywhere pans, **mouse-wheel zooms** in and out, and pressing `r` resets the view.  The output image is rendered in real-time as you interact, and the raytracing is restarted whenever the mirror geometry changes (e.g. when dragging a mirror in live-editing mode, or when changing presets with the menu). 
+
+
+## The Menu
 
 
 First, select an option for mirror geometry and user interaction mode:
@@ -45,9 +48,6 @@ The menu is shown on start-up, or can be accessed by pressing `SPACE` at any tim
 
 (as shown in the first two figures above)
 
-**Dragging** the image anywhere pans, **mouse-wheel zooms** in and out, and pressing `r` resets the view.  The output image is rendered in real-time as you interact, and the raytracing is restarted whenever the mirror geometry changes (e.g. when dragging a mirror in live-editing mode, or when changing presets with the menu). 
-
-
 ### Artistic effects (kaleidoscope mode):
 
 #### Reflections decay light intensity:
@@ -68,8 +68,13 @@ Hit 'h' at any time to see/dismiss the help display:
 
 [![Hotkey help](assets/help.jpg)](assets/hotkey_help.jpg)
 
-
-
+### Debug window:
+Running scope.py with the `--debug` flag opens a second window that steps through the raytracing iterations, with rays drawn to show intersections and reflection angles.  This is useful for understanding how the raytracing works and for debugging mirror geometry issues.  
+[![Debug window](assets/debug_window.jpg)](assets/debug_window.jpg)
+* Top-left: "top-down" view. Rays go from red points to green (hit the image) or blue (hit a mirror), shown here zoomed in. 
+* Bottom-left: "XZ-Plane" view, showing kaleidoscope from the side (the Y direction).  Eye is in light blue at the top, image plane is the yellow dashed line, and mirrors are the vertical gray lines.  Diagonal field-of-view lines are also show from the eye to the target plane.
+* Top-right: "YZ-Plane" view, showing Kaleidoscope from the X-direction.
+* Bottom-right: "Bounce Map" showing for the pixels that hit the image, how many mirrors they bounced off first.
 # Technical & implementation notes:
 
 ## Geometry
