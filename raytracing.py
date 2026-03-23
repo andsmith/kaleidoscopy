@@ -112,9 +112,11 @@ class Raytracer(object):
         """
         Convert the float map to float32 remap arrays for cv2.remap.
 
-        The source image of size (src_w, src_h) is mapped into the ±1 natural-coord
-        box preserving aspect ratio (contain mode).  pan_x/pan_y are in output pixel
-        units (same as UILayer.view_transform); zoom is the magnification factor.
+        The source image of size (src_w, src_h) is mapped into the largest centered
+        rectangle in natural-coord space (within [-x_max, x_max] x [-y_max, y_max])
+        that preserves source aspect ratio (contain mode).
+        pan_x/pan_y are in output pixel units (same as UILayer.view_transform);
+        zoom is the magnification factor.
 
         Results are cached; the cache is invalidated automatically each raytracing step.
 
@@ -172,33 +174,32 @@ class Raytracer(object):
             fx_view = vx * np.float32(2.0 * self._x_max / (w_out - 1)) - x_max32
             fy_view = y_max32 - vy * np.float32(2.0 * self._y_max / (h_out - 1))
 
-        # -- source pixel mapping (contain mode in the unit square [-1,1]²) --
-        # The source image is scaled to just fit inside the ±1 unit square,
-        # preserving aspect ratio.  Areas outside the image are marked OOB.
-        a = src_w / src_h
+        # -- source pixel mapping (contain mode within full natural FOV rectangle) --
+        # Fit source aspect ratio into [-x_max, x_max] x [-y_max, y_max].
+        # Anything outside that fitted source footprint is marked OOB.
+        a = np.float32(src_w / src_h)
+        fov_aspect = np.float32(self._x_max / self._y_max)
+
+        if a >= fov_aspect:
+            src_x_half = x_max32
+            src_y_half = np.float32(self._x_max / a)
+        else:
+            src_y_half = y_max32
+            src_x_half = np.float32(a * self._y_max)
+
+        sx_src = np.float32((src_w - 1) / (2.0 * src_x_half))
+        sy_src = np.float32((src_h - 1) / (2.0 * src_y_half))
+
         x_map = np.empty((h_out, w_out), dtype=np.float32)
         y_map = np.empty((h_out, w_out), dtype=np.float32)
 
-        if a >= 1.0:
-            # Wider source: fit width to [-1, 1], letterbox top/bottom.
-            np.add(fx_view, np.float32(1.0), out=x_map)
-            np.multiply(x_map, np.float32((src_w - 1) / 2.0), out=x_map)
-            np.rint(x_map, out=x_map)
+        np.add(fx_view, src_x_half, out=x_map)
+        np.multiply(x_map, sx_src, out=x_map)
+        np.rint(x_map, out=x_map)
 
-            y_half32 = np.float32(1.0 / a)
-            np.subtract(y_half32, fy_view, out=y_map)
-            np.multiply(y_map, np.float32(a * (src_h - 1) / 2.0), out=y_map)
-            np.rint(y_map, out=y_map)
-        else:
-            # Taller source: fit height to [-1, 1], pillarbox left/right.
-            np.subtract(np.float32(1.0), fy_view, out=y_map)
-            np.multiply(y_map, np.float32((src_h - 1) / 2.0), out=y_map)
-            np.rint(y_map, out=y_map)
-
-            x_half32 = np.float32(a)
-            np.add(fx_view, x_half32, out=x_map)
-            np.multiply(x_map, np.float32((src_w - 1) / (2.0 * a)), out=x_map)
-            np.rint(x_map, out=x_map)
+        np.subtract(src_y_half, fy_view, out=y_map)
+        np.multiply(y_map, sy_src, out=y_map)
+        np.rint(y_map, out=y_map)
 
         # OOB: clip and flag anything outside valid source pixel range on either axis
         x_lo, x_hi = float(x_map.min()), float(x_map.max())

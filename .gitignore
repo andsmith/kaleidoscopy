@@ -135,3 +135,24 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Local dev / scratch files
+.idea/
+loop_timing/
+az_question.py
+img_util.py
+scratch.txt
+bounces.json
+common_resolutions.json
+
+# Test / scratch images in repo root and asset duplicates
+*.webp
+/*.png
+assets/*.png
+assets/bkp/
+images/*.png
+debug_window.png
+parrot-big.png
+test*.png
+test*.jpg
+*.jpg

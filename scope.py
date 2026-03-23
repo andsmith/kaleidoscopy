@@ -33,18 +33,23 @@ SIDE_VIEW_WINDOW = "Kaleidoscopy - Side View  [ENTER=step  b=bounce/hit  s/t=mod
 GLASS_BORDER_COLOR = np.array((50, 50, 50), dtype=np.uint8)  # dark gray for stained-glass leading edges
 
 class ScopeApp(object):
-    def __init__(self, output_size, input_size=None, input_img=None, debug=False, interpolate=False):
+    def __init__(self, output_size, input_size=None, input_img=None, debug=False, interpolate=False,
+                 camera_index=0, camera_res=None):
         """
         :param output_size: the size of the output video stream (width, height)
         :param input_size: the size of the input video stream (width, height), ignored if input_img is provided
         :param input_img: if provided, this image will be used instead of the webcam feed. Should be a numpy array.
         :param debug: if True, shows side-view window, steps with Enter, uses non-threaded raytracer.
         :param interpolate: if True, use bilinear interpolation in the map lookup (cv2.remap); default is nearest-neighbour.
+        :param camera_index: camera device index passed to cv2.VideoCapture (default 0).
+        :param camera_res: (width, height) to request from the camera; defaults to output_size.
         """
         self._debug = debug
         self._interpolate = interpolate
         self._bkg = input_img
         self.out_size = output_size
+        self._camera_index = camera_index
+        self._camera_res = camera_res
         self.in_size = input_size if input_img is None else (input_img.shape[1], input_img.shape[0])
         self._frame_out = np.zeros((self.out_size[1], self.out_size[0], 3), dtype=np.uint8)
         self._f_no = 0
@@ -255,10 +260,11 @@ class ScopeApp(object):
             self._cam = None
             self.in_size = (self._bkg.shape[1], self._bkg.shape[0])
         else:
-            logging.info("Starting camera...")
-            self._cam = cv2.VideoCapture(0)
-            self._cam.set(cv2.CAP_PROP_FRAME_WIDTH, self.out_size[0])
-            self._cam.set(cv2.CAP_PROP_FRAME_HEIGHT, self.out_size[1])
+            logging.info("Starting camera %d...", self._camera_index)
+            self._cam = cv2.VideoCapture(self._camera_index)
+            cam_w, cam_h = self._camera_res or self.out_size
+            self._cam.set(cv2.CAP_PROP_FRAME_WIDTH, cam_w)
+            self._cam.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_h)
             height = int(self._cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
             width = int(self._cam.get(cv2.CAP_PROP_FRAME_WIDTH))
             logging.info("Camera resolution: %i x %i" % (width, height))
@@ -324,6 +330,7 @@ class ScopeApp(object):
     def start(self):
         self._running = True
         cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WINDOW_NAME, *self.out_size)
 
         if self._debug:
             self._open_side_view()
@@ -338,6 +345,8 @@ class ScopeApp(object):
 
         while self._running:
             input_frame = self._get_img()
+            # if _fps_frame_count % 10 == 0:
+            #     print("input frame shape:", input_frame.shape if input_frame is not None else None)
             if input_frame is None:
                 time.sleep(0.1)
                 continue
@@ -426,7 +435,7 @@ class ScopeApp(object):
                         _mean_fps, _render_ms, _ui_ms, _idle_ms,
                     )
                 w_out, h_out = self.out_size
-                logging.info("output resolution: %d x %d, %.2f MPix", w_out, h_out, w_out * h_out / 1e6)
+                # logging.info("output resolution: %d x %d, %.2f MPix", w_out, h_out, w_out * h_out / 1e6)
                 _fps_last_log = _now
                 _fps_frame_count = 0
                 _fps_ui_time = 0.0
@@ -438,13 +447,44 @@ class ScopeApp(object):
         cv2.destroyAllWindows()
 
 
+_RESOLUTION_PRESETS = {1: (640, 480), 2: (800, 600), 3: (1024, 768), 4: (1280, 1024), 5: (1920, 1080)}
+_PRESET_HELP = "1=640x480  2=800x600  3=1024x768  4=1280x1024  5=1920x1080"
+
+
+def _parse_res(vals, flag, parser):
+    """Parse a resolution argument: 1 int → preset lookup, 2 ints → (width, height)."""
+    if len(vals) == 1:
+        if vals[0] not in _RESOLUTION_PRESETS:
+            parser.error("%s: preset must be 1–5 (%s)" % (flag, _PRESET_HELP))
+        return _RESOLUTION_PRESETS[vals[0]]
+    if len(vals) == 2:
+        if any(v < 1 for v in vals):
+            parser.error("%s: width and height must be positive integers" % flag)
+        return (vals[0], vals[1])
+    parser.error("%s: expected 1 preset number or 2 integers (width height)" % flag)
+
+
 def start_scope():
-    parser = argparse.ArgumentParser(description="Kaleidoscopy")
-    parser.add_argument("image", nargs="?", help="Input image path (default: webcam)")
+    parser = argparse.ArgumentParser(
+        description="Kaleidoscopy — live kaleidoscope using mirrors and a camera or image.",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument("image", nargs="?",
+                        help="Input image path. Omit to use the webcam.")
     parser.add_argument("-d", "--debug", action="store_true",
-                        help="Debug mode: show side-view, step with Enter, non-threaded raytracer")
+                        help="Debug mode: show side-view, step with Enter, non-threaded raytracer.")
     parser.add_argument("-i", "--interpolate", action="store_true",
-                        help="Use bilinear interpolation in map lookup (default: nearest-neighbour)")
+                        help="Use bilinear interpolation in map lookup (default: nearest-neighbour).")
+    parser.add_argument("-r", "--res", nargs="+", type=int, metavar=("PRESET", "H"),
+                        help=("Output window resolution.\n"
+                              "  One int  : preset number — %s\n"
+                              "  Two ints : custom width height  (e.g. -r 1280 720)\n"
+                              "Default: 5 (1920x1080)." % _PRESET_HELP))
+    parser.add_argument("-cr", "--camera-res", nargs="+", type=int, metavar=("PRESET", "H"),
+                        help=("Camera input resolution (same format as -r).\n"
+                              "Defaults to the output resolution when not specified."))
+    parser.add_argument("-c", "--camera", type=int, default=0, metavar="INDEX",
+                        help="Camera device index (default: 0).")
     args = parser.parse_args()
 
     if args.image is not None:
@@ -455,8 +495,11 @@ def start_scope():
     else:
         img = None
 
-    out_size = 1920, 1080
-    app = ScopeApp(out_size, input_img=img, debug=args.debug, interpolate=args.interpolate)
+    out_size = _parse_res(args.res, "-r/--res", parser) if args.res else (1920, 1080)
+    cam_res = _parse_res(args.camera_res, "-cr/--camera-res", parser) if args.camera_res else None
+
+    app = ScopeApp(out_size, input_img=img, debug=args.debug, interpolate=args.interpolate,
+                   camera_index=args.camera, camera_res=cam_res)
     app.start()
 
 
