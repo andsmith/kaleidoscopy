@@ -34,7 +34,7 @@ GLASS_BORDER_COLOR = np.array((50, 50, 50), dtype=np.uint8)  # dark gray for sta
 
 class ScopeApp(object):
     def __init__(self, output_size, input_size=None, input_img=None, debug=False, interpolate=False,
-                 camera_index=0, camera_res=None):
+                 camera_index=0, camera_res=None, n_cpu=1):
         """
         :param output_size: the size of the output video stream (width, height)
         :param input_size: the size of the input video stream (width, height), ignored if input_img is provided
@@ -43,6 +43,7 @@ class ScopeApp(object):
         :param interpolate: if True, use bilinear interpolation in the map lookup (cv2.remap); default is nearest-neighbour.
         :param camera_index: camera device index passed to cv2.VideoCapture (default 0).
         :param camera_res: (width, height) to request from the camera; defaults to output_size.
+        :param n_cpu: number of CPU cores to use for raytracing (default 1 = single-core).
         """
         self._debug = debug
         self._interpolate = interpolate
@@ -50,6 +51,7 @@ class ScopeApp(object):
         self.out_size = output_size
         self._camera_index = camera_index
         self._camera_res = camera_res
+        self._n_cpu = n_cpu
         self.in_size = input_size if input_img is None else (input_img.shape[1], input_img.shape[0])
         self._frame_out = np.zeros((self.out_size[1], self.out_size[0], 3), dtype=np.uint8)
         self._f_no = 0
@@ -127,6 +129,7 @@ class ScopeApp(object):
             self.out_size, new_mirrors.mirrors, TARG_Z, x_max, y_max, img_z,
             threaded=not self._debug,
             initial_map=initial_map,
+            n_workers=self._n_cpu,
         )
         if self._debug:
             self._raytracer._init_rays()   # debug: manual stepping via Enter key
@@ -485,6 +488,8 @@ def start_scope():
                               "Defaults to the output resolution when not specified."))
     parser.add_argument("-c", "--camera", type=int, default=0, metavar="INDEX",
                         help="Camera device index (default: 0).")
+    parser.add_argument("-n", "--n_cpu", type=int, default=1, metavar="N",
+                        help="Number of CPU cores for raytracing (default: 1 = single-core).")
     args = parser.parse_args()
 
     if args.image is not None:
@@ -499,7 +504,7 @@ def start_scope():
     cam_res = _parse_res(args.camera_res, "-cr/--camera-res", parser) if args.camera_res else None
 
     app = ScopeApp(out_size, input_img=img, debug=args.debug, interpolate=args.interpolate,
-                   camera_index=args.camera, camera_res=cam_res)
+                   camera_index=args.camera, camera_res=cam_res, n_cpu=args.n_cpu)
     app.start()
 
 

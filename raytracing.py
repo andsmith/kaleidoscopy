@@ -20,13 +20,14 @@ import cv2
 import json
 
 from threading import Thread, Lock, Event
+from concurrent.futures import ThreadPoolExecutor
 import logging
 from init_rays import make_ray_grid
 
 
 
 class Raytracer(object):
-    def __init__(self, size, mirrors, targ_z, x_max, y_max, img_z, threaded=False, bounce_file=None, initial_map=None):
+    def __init__(self, size, mirrors, targ_z, x_max, y_max, img_z, threaded=False, bounce_file=None, initial_map=None, n_workers=1):
         """
         :param size: (w_out, h_out) output image size in pixels
         :param mirrors: list of Mirror objects
@@ -39,6 +40,8 @@ class Raytracer(object):
            raytraced.
         :param bounce_file: if not None, path to a JSON file where the full bounce
            history will be written (updated after each iteration).
+        :param n_workers: number of CPU cores to use for raytracing (default 1 = single-core,
+           no thread pool overhead).  Values > 1 split rays across a ThreadPoolExecutor.
         """
         self._size = size
         self._mirrors = mirrors
@@ -56,6 +59,8 @@ class Raytracer(object):
         self._int_map_cache_key = None   # (src_w, src_h, pan_x, pan_y, zoom)
         self._int_map_cache_val = None   # (x_int, y_int, oob_mask, map_version)
         self._stop_event = Event()
+        self._n_workers = n_workers
+        self._executor = ThreadPoolExecutor(max_workers=n_workers) if n_workers > 1 else None
 
     def _init_rays(self):
         """
@@ -315,9 +320,26 @@ class Raytracer(object):
             step_dirs_snap    = self._step_dirs.copy()
 
         # Run one bounce for the active subset, excluding each ray's last mirror
-        bounce = _bounce(self._step_origins[act], self._step_dirs[act],
-                         self._mirrors, self._targ_z,
-                         last_mirror_inds=self._step_last_mirror_inds[act])
+        if self._executor is None or len(act) < _MIN_PARALLEL_RAYS:
+            bounce = _bounce(self._step_origins[act], self._step_dirs[act],
+                             self._mirrors, self._targ_z,
+                             last_mirror_inds=self._step_last_mirror_inds[act])
+        else:
+            chunks = _split_chunks(act, self._n_workers)
+            futures = []
+            offset = 0
+            for chunk in chunks:
+                fut = self._executor.submit(
+                    _bounce,
+                    self._step_origins[chunk],
+                    self._step_dirs[chunk],
+                    self._mirrors,
+                    self._targ_z,
+                    last_mirror_inds=self._step_last_mirror_inds[chunk],
+                )
+                futures.append((offset, fut))
+                offset += len(chunk)
+            bounce = _merge_bounce_results([(off, f.result()) for off, f in futures])
 
         t_local = bounce['target_hit_inds']  # indices into act[]
         m_local = bounce['mirror_hit_inds']  # indices into act[]
@@ -477,6 +499,8 @@ class Raytracer(object):
     def stop(self):
         """Signal the background thread to stop after its current step.  No-op if not threaded."""
         self._stop_event.set()
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
 
     def start(self):
         # Always initialise rays synchronously so get_map() is usable immediately
@@ -498,6 +522,43 @@ class Raytracer(object):
             self._thread.start()
         else:
             _trace()
+
+
+_MIN_PARALLEL_RAYS = 256  # below this threshold, serial _bounce() is faster than pool dispatch
+
+
+def _split_chunks(act, n_workers):
+    """Split act into at most n_workers roughly-equal index chunks."""
+    n = len(act)
+    if n == 0:
+        return []
+    chunk_size = max(1, n // n_workers)
+    return [act[i:i + chunk_size] for i in range(0, n, chunk_size)]
+
+
+def _merge_bounce_results(chunk_results):
+    """
+    Merge per-chunk _bounce() results into one dict with the same structure
+    as a serial _bounce() call.
+
+    :param chunk_results: list of (chunk_start_offset, result_dict) where
+        chunk_start_offset is the 0-based start of this chunk within the act array.
+    """
+    all_t, all_m = [], []
+    all_origins, all_dirs, all_closest = [], [], []
+    for offset, r in chunk_results:
+        all_t.append(r['target_hit_inds'] + offset)
+        all_m.append(r['mirror_hit_inds'] + offset)
+        all_origins.append(r['new_origins'])
+        all_dirs.append(r['new_directions'])
+        all_closest.append(r['closest_mirror_inds'])
+    return {
+        'target_hit_inds':     np.concatenate(all_t)               if all_t else np.empty(0, np.int32),
+        'mirror_hit_inds':     np.concatenate(all_m)               if all_m else np.empty(0, np.int32),
+        'new_origins':         np.concatenate(all_origins, axis=0),
+        'new_directions':      np.concatenate(all_dirs,    axis=0),
+        'closest_mirror_inds': np.concatenate(all_closest),
+    }
 
 
 def _bounce(origins, directions, mirrors, targ_z, last_mirror_inds=None):
