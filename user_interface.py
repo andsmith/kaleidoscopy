@@ -86,8 +86,7 @@ _HELP_SECTIONS = [
             ("h / H",      "show / hide this help"),
             ("q / ESC",    "quit"),
             ("f",          "toggle fullscreen"),
-            ("v",          "toggle control-point overlay (live edit)"),
-            ("-  /  =",    "scale mirrors down / up"),
+            ("scroll",     "zoom in / out"),
         ]),
         ("menu", [
             ("SPACE",      "open menu / confirm selection"),
@@ -97,16 +96,20 @@ _HELP_SECTIONS = [
         ("effects", [
             ("0",          "reset pan / zoom and disable all effects"),
             ("1",          "cycle fade effect"),
-            ("2",          "cycle stained-glass effect"),
+            ("2",          "cycle stained-glass border"),
             ("w",          "cycle stain threshold"),
+        ]),
+        ("live-edit", [
+            ("v",          "toggle control-point overlay"),
+            ("-  /  =",    "scale mirrors down / up"),
         ]),
         ("debug-mode", [
             ("ENTER",      "advance one raytrace step"),
-            ("b",          "toggle bounce / hit draw mode"),
-            ("s",          "start (vector) draw mode"),
-            ("t",          "trails draw mode"),
-            ("r",          "reset zoom"),
-            ("scroll",     "zoom in / out"),
+            ("b",          "cycle bounce / hit / off"),
+            ("t",          "toggle trails (independent)"),
+            ("s",          "toggle start vectors"),
+            ("r",          "reset side-view zoom"),
+            ("scroll",     "zoom side-view panels"),
             ("d",          "close debug window"),
         ]),
     ]),
@@ -255,7 +258,7 @@ class UILayer(object):
             if key == ord('1'):
                 self._fade_idx = (self._fade_idx + 1) % 6
             if key == ord('2'):
-                self._stain_idx = (self._stain_idx + 1) % 6
+                self._stain_idx = (self._stain_idx + 1) % 3
             if key == ord('w'):
                 self._stain_thresh_idx = (self._stain_thresh_idx + 1) % 4
 
@@ -270,7 +273,7 @@ class UILayer(object):
             if key == ord('1'):
                 self._fade_idx = (self._fade_idx + 1) % 6
             if key == ord('2'):
-                self._stain_idx = (self._stain_idx + 1) % 6
+                self._stain_idx = (self._stain_idx + 1) % 3
             if key == ord('w'):
                 self._stain_thresh_idx = (self._stain_thresh_idx + 1) % 4
             if key == ord('v'):
@@ -524,21 +527,8 @@ class UILayer(object):
             elif event == cv2.EVENT_LBUTTONUP:
                 self._pan_drag_last = None
             elif event == cv2.EVENT_MOUSEWHEEL:
-                old_zoom = self._view_zoom
                 factor = 1.15 if flags > 0 else 1.0 / 1.15
-                new_zoom = float(np.clip(old_zoom * factor, 0.1, 20.0))
-                # Adjust pan so the source point under the cursor stays fixed.
-                # The cursor is at output pixel (x, y); output center is (out_w/2, out_h/2).
-                # Offset from center: (dx_scr, dy_scr)
-                # In source space before zoom: pan + dx_scr * old_zoom
-                # We want: pan' + dx_scr * new_zoom = pan + dx_scr * old_zoom
-                # => pan' = pan + dx_scr * (old_zoom - new_zoom)
-                out_w, out_h = self.app.out_size
-                dx_scr = x - out_w / 2.0
-                dy_scr = y - out_h / 2.0
-                self._view_pan[0] += dx_scr * (old_zoom - new_zoom)
-                self._view_pan[1] += dy_scr * (old_zoom - new_zoom)
-                self._view_zoom = new_zoom
+                self._view_zoom = float(np.clip(self._view_zoom * factor, 0.1, 20.0))
             return
 
         if self.mode == UIModes.MENU:
@@ -613,13 +603,8 @@ class UILayer(object):
         elif event == cv2.EVENT_MOUSEWHEEL:
             if self.mode == UIModes.LIVE_EDITING and not self._mouse_in_interior:
                 # Outside the mirror tube interior: zoom like INACTIVE mode
-                old_zoom = self._view_zoom
                 factor = 1.15 if flags > 0 else 1.0 / 1.15
-                new_zoom = float(np.clip(old_zoom * factor, 0.1, 20.0))
-                out_w, out_h = self.app.out_size
-                self._view_pan[0] += (x - out_w / 2.0) * (old_zoom - new_zoom)
-                self._view_pan[1] += (y - out_h / 2.0) * (old_zoom - new_zoom)
-                self._view_zoom = new_zoom
+                self._view_zoom = float(np.clip(self._view_zoom * factor, 0.1, 20.0))
             else:
                 # Over the interior (or EDITING_MIRRORS): scale the mirror tube
                 self._scale_mirrors(1.1 if flags > 0 else 1 / 1.1)
@@ -855,8 +840,9 @@ class UILayer(object):
             (top_size, _) = cv2.getTextSize(top_name, font, sc, thick)
             max_top_w = max(max_top_w, top_size[0])
             for section_name, entries in sub_sections:
-                (section_size, _) = cv2.getTextSize(section_name, font, sc, thick)
-                max_section_w = max(max_section_w, section_size[0])
+                for part in section_name.split('-'):
+                    (section_size, _) = cv2.getTextSize(part, font, sc, thick)
+                    max_section_w = max(max_section_w, section_size[0])
                 for key_str, desc_str in entries:
                     (key_size, _) = cv2.getTextSize(key_str, font, tc, thick)
                     (desc_size, _) = cv2.getTextSize(desc_str, font, tc, thick)
@@ -864,11 +850,12 @@ class UILayer(object):
                     max_desc_w = max(max_desc_w, desc_size[0])
 
         # Left side natural width (relative to tx0; title/subtitle are globally centered)
+        # Section names occupy their own column immediately left of the key/desc columns.
+        section_col_w = max_section_w + TITLE_INDENT_PX
         left_natural_w = max(
             max_top_w,
-            max_section_w,
-            TITLE_INDENT_PX + max_key_w,
-            TITLE_INDENT_PX + max_key_w + TITLE_INDENT_PX + max_desc_w,
+            section_col_w + max_key_w,
+            section_col_w + max_key_w + TITLE_INDENT_PX + max_desc_w,
         )
 
         # Estimate content_top_y (after header) for right-side vertical sizing
@@ -908,7 +895,7 @@ class UILayer(object):
         pad_w = max(COL_MARGIN_PX, extra_w // 3)
         tx0 = bx0 + pad_w
         section_x = tx0
-        key_x = section_x + TITLE_INDENT_PX
+        key_x = tx0 + section_col_w
         desc_x = key_x + max_key_w + TITLE_INDENT_PX
         rx0 = bx0 + pad_w + left_natural_w + pad_w
         rx1 = rx0 + right_natural_w
@@ -931,11 +918,15 @@ class UILayer(object):
         content_top_y = y
 
         def _section_height(section_name, entries):
-            (_, sh), sbl = cv2.getTextSize(section_name, font, sc, thick)
-            height = sh + sbl + 2 + 12
-            for key_str, desc_str in entries:
+            # Section name is in a side column; height is just the entry rows.
+            # Rows that carry a non-last name part get extra vertical spacing.
+            n_parts = len(section_name.split('-'))
+            height = 0
+            for entry_idx, (key_str, desc_str) in enumerate(entries):
                 (_, kh), kbl = cv2.getTextSize(key_str, font, tc, thick)
                 height += kh + kbl + 4
+                if entry_idx < n_parts - 1:
+                    height += kbl + 4
             return height
 
         top_name, sub_sections = _HELP_SECTIONS[0]
@@ -953,19 +944,19 @@ class UILayer(object):
         extra_gap = 0.0 if n_section_gaps == 0 else max(0.0, (available_section_height - total_section_height) / n_section_gaps)
 
         for section_idx, (section_name, entries) in enumerate(sub_sections):
-            section_size, sbl = cv2.getTextSize(section_name, font, sc, thick)
-            sw = section_size[0]
-            sh = section_size[1]
-            cv2.putText(frame, section_name, (section_x, y + sh), font, sc, color, thick, aa)
-            y += sh + sbl + 2
-            cv2.line(frame, (section_x, y), (section_x + sw, y), color, 1, aa)
-            y += 12
-
-            for key_str, desc_str in entries:
+            name_parts = section_name.split('-')
+            for entry_idx, (key_str, desc_str) in enumerate(entries):
                 (_, kh), kbl = cv2.getTextSize(key_str, font, tc, thick)
+                if entry_idx < len(name_parts):
+                    part = name_parts[entry_idx]
+                    (sw_p, _), _ = cv2.getTextSize(part, font, sc, thick)
+                    cv2.putText(frame, part, (section_x, y + kh), font, sc, color, thick, aa)
+                    cv2.line(frame, (section_x, y + kh + 2), (section_x + sw_p, y + kh + 2), color, 1, aa)
                 cv2.putText(frame, key_str, (key_x, y + kh), font, tc, color, thick, aa)
                 cv2.putText(frame, desc_str, (desc_x, y + kh), font, tc, color, thick, aa)
                 y += kh + kbl + 4
+                if entry_idx < len(name_parts) - 1:
+                    y += kbl + 4
             if section_idx < len(sub_sections) - 1:
                 y += int(round(extra_gap))
 
