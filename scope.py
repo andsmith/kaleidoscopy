@@ -25,7 +25,7 @@ from geom import TARG_Z, COLORS, BKG
 from user_interface import UIModes, UILayer
 
 _FADE_FACTORS = [1.0, 0.99, 0.95, 0.90, 0.75, 0.50]
-_STAIN_DISTANCES = [0, 1, 2, 3, 5, 8]
+_STAIN_DISTANCES = [0, 1, 3]
 _STAIN_THRESHOLDS = [1.0, 2.0, 3.0, 5.0]  # multiples of neighborhood diagonal
 
 WINDOW_NAME = "Kaleidoscopy!"
@@ -75,7 +75,7 @@ class ScopeApp(object):
         self._last_stain_thresh_idx = -1
 
         self._side_view_open = False  # opened in start() if debug mode
-        self._side_view_state = SideViewState(mode='bounce')
+        self._side_view_state = SideViewState()
         self._side_view_size = output_size
 
     @property
@@ -303,13 +303,17 @@ class ScopeApp(object):
 
     def _handle_side_view_key(self, k):
         if k == ord('b'):
-            self._side_view_state.mode = 'hit' if self._side_view_state.mode == 'bounce' else 'bounce'
+            modes = ['bounce', 'hit', 'off']
+            st = self._side_view_state
+            st.ray_mode = modes[(modes.index(st.ray_mode) + 1) % 3]
         elif k == ord('s'):
-            self._side_view_state.mode = 'start'
+            self._side_view_state.show_start = not self._side_view_state.show_start
         elif k == ord('t'):
-            self._side_view_state.mode = 'trails'
+            self._side_view_state.show_trails = not self._side_view_state.show_trails
         elif k == ord('r'):
             self._side_view_state.reset_zoom()
+        elif k == ord('d'):
+            self._close_side_view()
 
     def _tick_side_view(self):
         rect = cv2.getWindowImageRect(SIDE_VIEW_WINDOW)
@@ -505,6 +509,16 @@ def start_scope():
 
     app = ScopeApp(out_size, input_img=img, debug=args.debug, interpolate=args.interpolate,
                    camera_index=args.camera, camera_res=cam_res, n_cpu=args.n_cpu)
+
+    iw, ih = app.in_size
+    ow, oh = app.out_size
+    src = ("image '%s' (%dx%d)" % (args.image, iw, ih)) if args.image else ("camera %d (%dx%d)" % (args.camera, iw, ih))
+    print("Input  : %s" % src)
+    print("Output : %dx%d" % (ow, oh))
+    print("CPUs   : %d" % args.n_cpu)
+    print("Interp : %s" % ("bilinear" if args.interpolate else "nearest-neighbour"))
+    print("Debug  : %s" % ("on" if args.debug else "off"))
+
     app.start()
 
 

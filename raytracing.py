@@ -27,6 +27,11 @@ from init_rays import make_ray_grid
 
 
 class Raytracer(object):
+    # Number of rays along the longer dimension to keep in compact bounce records.
+    # Full-res grids (e.g. 1920×1080) store only this many rays per step instead of
+    # all N pixels, keeping debug-mode memory usage manageable.
+    _BOUNCE_DISPLAY_N_RAYS = 20
+
     def __init__(self, size, mirrors, targ_z, x_max, y_max, img_z, threaded=False, bounce_file=None, initial_map=None, n_workers=1):
         """
         :param size: (w_out, h_out) output image size in pixels
@@ -103,6 +108,20 @@ class Raytracer(object):
         self._bounces      = []
         self._display_mask = None  # optional bool mask for which rays to visualise
         self._step_last_mirror_inds = np.full((N, 2), -1, dtype=np.int32)
+
+        # Precompute the small subset of ray indices used by the side-view display so
+        # that bounce records only store data for those rays (not all N pixels).
+        n_d = self._BOUNCE_DISPLAY_N_RAYS
+        if w_out >= h_out:
+            n_dx, n_dy = n_d, max(2, round(n_d * h_out / w_out))
+        else:
+            n_dy, n_dx = n_d, max(2, round(n_d * w_out / h_out))
+        r_inds = np.unique(np.concatenate([[0, h_out - 1],
+                                           np.round(np.linspace(0, h_out - 1, n_dy)).astype(int)]))
+        c_inds = np.unique(np.concatenate([[0, w_out - 1],
+                                           np.round(np.linspace(0, w_out - 1, n_dx)).astype(int)]))
+        gr, gc = np.meshgrid(r_inds, c_inds, indexing='ij')
+        self._bounce_display_inds = np.unique((gr * w_out + gc).flatten())
         self._step_index = 0
         self._step_last_summary = None
         self._bounce_log = self._build_bounce_header() if self._bounce_file is not None else None
@@ -414,13 +433,15 @@ class Raytracer(object):
         self._step_dirs = new_dirs
 
         if record_bounces:
+            d = self._bounce_display_inds
             self._bounces.append({
-                'step_origins': step_origins_snap,
-                'step_dirs':    step_dirs_snap,
-                'hit_origins':  hit_origins,
-                'hit_dirs':     hit_dirs,
-                'hit_mirror':   hit_mirror,
-                'hit_target':   hit_target,
+                'display_inds': d,
+                'step_origins': step_origins_snap[d],
+                'step_dirs':    step_dirs_snap[d],
+                'hit_origins':  hit_origins[d],
+                'hit_dirs':     hit_dirs[d],
+                'hit_mirror':   hit_mirror[d],
+                'hit_target':   hit_target[d],
             })
 
         self._step_last_summary = {
@@ -889,8 +910,8 @@ def test_raytracing(test_kind='corner-1'):
         rt._step_active &= mask
         rt._display_mask = mask
 
-    state    = SideViewState(mode='start')
-    win_name = "Raytracer Step Test  [SPACE=step  b/h/s/t=mode  r=reset zoom  Q=quit]"
+    state    = SideViewState(show_start=True)
+    win_name = "Raytracer Step Test  [SPACE=step  b=bounce/hit/off  t=trails  s=start  r=reset zoom  Q=quit]"
     win_size = (1200, 800)
     cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(win_name, *win_size)
@@ -919,13 +940,12 @@ def test_raytracing(test_kind='corner-1'):
                     done = True
                     print(f"All rays traced in {len(rt.get_bounces())} steps.")
         elif k == ord('b'):
-            state.mode = 'bounce'
-        elif k == ord('h'):
-            state.mode = 'hit'
+            modes = ['bounce', 'hit', 'off']
+            state.ray_mode = modes[(modes.index(state.ray_mode) + 1) % 3]
         elif k == ord('s'):
-            state.mode = 'start'
+            state.show_start = not state.show_start
         elif k == ord('t'):
-            state.mode = 'trails'
+            state.show_trails = not state.show_trails
         elif k == ord('r'):
             state.reset_zoom()
 

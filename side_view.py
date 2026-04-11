@@ -246,8 +246,10 @@ class SideViewState:
             ...
     """
 
-    def __init__(self, mode='bounce', n_rays=N_RAYS_DEFAULT):
-        self.mode   = mode
+    def __init__(self, ray_mode='bounce', show_trails=False, show_start=False, n_rays=N_RAYS_DEFAULT):
+        self.ray_mode    = ray_mode     # 'bounce', 'hit', or 'off'
+        self.show_trails = show_trails  # draw full path history
+        self.show_start  = show_start   # draw initial ray vectors
         self.n_rays = n_rays
         self._zooms = {k: ZoomState() for k in ('topdown', 'xz', 'yz')}
         # Set by render_side_view so the mouse callback has current geometry
@@ -655,6 +657,15 @@ def _draw_rays(img, mode, subset_inds, origins, init_dirs, bounces, transforms):
 
     All primitives are clipped so zoomed views never spill into adjacent panels.
     """
+    # When bounce records are compact (Raytracer stores only display_inds rows),
+    # map each global ray index to its local position in the stored arrays.
+    if bounces and 'display_inds' in bounces[-1]:
+        _disp = bounces[-1]['display_inds']
+        _g2l = {int(g): l for l, g in enumerate(_disp)}
+        def _li(idx): return _g2l[idx]
+    else:
+        def _li(idx): return idx
+
     for panel_name, axes in _PANEL_AXES.items():
         tf = transforms[panel_name]
 
@@ -662,8 +673,9 @@ def _draw_rays(img, mode, subset_inds, origins, init_dirs, bounces, transforms):
 
             if mode == 'start':
                 if bounces:
-                    cur_o = bounces[-1]['step_origins'][idx]
-                    cur_d = bounces[-1]['step_dirs'][idx]
+                    li = _li(idx)
+                    cur_o = bounces[-1]['step_origins'][li]
+                    cur_d = bounces[-1]['step_dirs'][li]
                 else:
                     cur_o = origins[idx]
                     cur_d = init_dirs[idx]
@@ -677,37 +689,38 @@ def _draw_rays(img, mode, subset_inds, origins, init_dirs, bounces, transforms):
                 if not bounces:
                     continue
                 step = bounces[-1]
-                o_px = tf.to_px(*_project(step['step_origins'][idx], axes))
-                h_px = tf.to_px(*_project(step['hit_origins'][idx], axes))
+                li = _li(idx)
+                o_px = tf.to_px(*_project(step['step_origins'][li], axes))
+                h_px = tf.to_px(*_project(step['hit_origins'][li], axes))
                 if tf.in_panel(*o_px):
                     cv2.circle(img, o_px, DOT_RADIUS, COLORS['red'], -1, cv2.LINE_AA)
                 seg = tf.clip_line(o_px, h_px)
                 if seg:
                     cv2.line(img, seg[0], seg[1], COLORS['gray'], 1, cv2.LINE_AA)
                 if tf.in_panel(*h_px):
-                    color = COLORS['blue'] if step['hit_mirror'][idx] else COLORS['green']
-                    r = DOT_RADIUS + 2 if step['hit_target'][idx] else DOT_RADIUS
+                    color = COLORS['blue'] if step['hit_mirror'][li] else COLORS['green']
+                    r = DOT_RADIUS + 2 if step['hit_target'][li] else DOT_RADIUS
                     cv2.circle(img, h_px, r, color, -1, cv2.LINE_AA)
 
             elif mode == 'bounce':
                 if not bounces:
                     continue
                 step = bounces[-1]
-                o_px = tf.to_px(*_project(step['step_origins'][idx], axes))
-                h_px = tf.to_px(*_project(step['hit_origins'][idx], axes))
+                li = _li(idx)
+                o_px = tf.to_px(*_project(step['step_origins'][li], axes))
+                h_px = tf.to_px(*_project(step['hit_origins'][li], axes))
                 if tf.in_panel(*o_px):
                     cv2.circle(img, o_px, DOT_RADIUS, COLORS['red'], -1, cv2.LINE_AA)
                 seg = tf.clip_line(o_px, h_px)
-                
                 if seg:
                     cv2.line(img, seg[0], seg[1], COLORS['gray'], 1, cv2.LINE_AA)
-                if step['hit_mirror'][idx]:
+                if step['hit_mirror'][li]:
                     if tf.in_panel(*h_px):
                         cv2.circle(img, h_px, DOT_RADIUS, COLORS['blue'], -1, cv2.LINE_AA)
-                    hit_d = step['hit_dirs'][idx]
-                    e_px = _arrow_endpoint_px_fixed_len(step['hit_origins'][idx], hit_d, axes, tf, UNIT_VEC_LEN_PX)
+                    hit_d = step['hit_dirs'][li]
+                    e_px = _arrow_endpoint_px_fixed_len(step['hit_origins'][li], hit_d, axes, tf, UNIT_VEC_LEN_PX)
                     _draw_arrow(img, h_px, e_px, COLORS['cyan'], 1, clip_tf=tf)
-                elif step['hit_target'][idx]:
+                elif step['hit_target'][li]:
                     if tf.in_panel(*h_px):
                         cv2.circle(img, h_px, DOT_RADIUS + 2, COLORS['green'], -1, cv2.LINE_AA)
 
@@ -715,19 +728,20 @@ def _draw_rays(img, mode, subset_inds, origins, init_dirs, bounces, transforms):
                 if not bounces:
                     continue
                 for k, step in enumerate(bounces):
+                    li = _li(idx)
                     is_last = (k == len(bounces) - 1)
                     alpha     = 0.40
                     thickness = 1
                     color = tuple(int(c * alpha) for c in COLORS['white'])
-                    so_px = tf.to_px(*_project(step['step_origins'][idx], axes))
-                    ho_px = tf.to_px(*_project(step['hit_origins'][idx], axes))
+                    so_px = tf.to_px(*_project(step['step_origins'][li], axes))
+                    ho_px = tf.to_px(*_project(step['hit_origins'][li], axes))
                     seg = tf.clip_line(so_px, ho_px)
                     if seg:
                         cv2.line(img, seg[0], seg[1], color, thickness, cv2.LINE_AA)
                     if is_last:
-                        if step['hit_mirror'][idx] and tf.in_panel(*ho_px):
+                        if step['hit_mirror'][li] and tf.in_panel(*ho_px):
                             cv2.circle(img, ho_px, DOT_RADIUS, COLORS['green'], -1, cv2.LINE_AA)
-                        elif step['hit_target'][idx] and tf.in_panel(*ho_px):
+                        elif step['hit_target'][li] and tf.in_panel(*ho_px):
                             cv2.circle(img, ho_px, DOT_RADIUS + 2, COLORS['red'], -1, cv2.LINE_AA)
 
 
@@ -850,8 +864,15 @@ def render_side_view(raytracer, img_size, state=None, mode='bounce', n_rays=N_RA
     :returns: (h, w, 3) uint8 numpy array
     """
     if state is not None:
-        mode   = state.mode
-        n_rays = state.n_rays
+        ray_mode    = state.ray_mode
+        show_trails = state.show_trails
+        show_start  = state.show_start
+        n_rays      = state.n_rays
+    else:
+        # Legacy mode string → new independent flags
+        ray_mode    = mode if mode in ('bounce', 'hit') else 'off'
+        show_trails = (mode == 'trails')
+        show_start  = (mode == 'start')
 
     t0 = time.time()
     img_w, img_h = img_size
@@ -895,11 +916,20 @@ def render_side_view(raytracer, img_size, state=None, mode='bounce', n_rays=N_RA
         _draw_eye(img, tfs)
 
         if params['ray_grid_shape']:
-            subset = select_ray_subset(params['ray_grid_shape'], n_rays)
+            if bounces and 'display_inds' in bounces[-1]:
+                # Compact bounce records: indices and arrays are already subsampled.
+                subset = bounces[-1]['display_inds']
+            else:
+                subset = select_ray_subset(params['ray_grid_shape'], n_rays)
             display_mask = params.get('display_mask')
             if display_mask is not None:
                 subset = subset[display_mask[subset]]
-            _draw_rays(img, mode, subset, origins, init_dirs, bounces, tfs)
+            if show_trails:
+                _draw_rays(img, 'trails', subset, origins, init_dirs, bounces, tfs)
+            if show_start:
+                _draw_rays(img, 'start', subset, origins, init_dirs, bounces, tfs)
+            if ray_mode != 'off':
+                _draw_rays(img, ray_mode, subset, origins, init_dirs, bounces, tfs)
 
         t_elapsed = time.time() - t0
 
@@ -937,8 +967,8 @@ if __name__ == "__main__":
     rt = FakeRaytracer(OUT_SIZE, mirrors=tube.mirrors,
                        x_max=x_max, y_max=y_max, img_z=img_z, targ_z=TARG_Z)
 
-    state  = SideViewState(mode='bounce')
-    window = "side_view  [b=bounce/hit  s/t=mode  r=reset zoom  scroll=zoom  q=quit]"
+    state  = SideViewState()
+    window = "side_view  [b=bounce/hit/off  t=trails  s=start  r=reset zoom  scroll=zoom  q=quit]"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window, *OUT_SIZE)
     cv2.setMouseCallback(window, state.mouse_callback)
@@ -951,11 +981,12 @@ if __name__ == "__main__":
         if k in (ord('q'), 27):
             break
         elif k == ord('b'):
-            state.mode = 'hit' if state.mode == 'bounce' else 'bounce'
+            modes = ['bounce', 'hit', 'off']
+            state.ray_mode = modes[(modes.index(state.ray_mode) + 1) % 3]
         elif k == ord('s'):
-            state.mode = 'start'
+            state.show_start = not state.show_start
         elif k == ord('t'):
-            state.mode = 'trails'
+            state.show_trails = not state.show_trails
         elif k == ord('r'):
             state.reset_zoom()
 
